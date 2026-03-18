@@ -39,7 +39,10 @@ cp .env.example .env
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY` (preferred)
+- `VITE_SUPABASE_PUBLISHABLE_KEY` (fallback)
 - `VITE_SUPABASE_ANON_KEY` (fallback)
+
+If you change `.env` while the dev server is running, restart `npm run dev`.
 
 4. Run app:
 

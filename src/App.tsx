@@ -54,7 +54,7 @@ function App() {
   if (!isSupabaseConfigured) {
     return (
       <div className="notice-card">
-        Missing Supabase env vars. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env to use the dashboard.
+        Missing Supabase env vars. Set VITE_SUPABASE_URL and one of VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY, VITE_SUPABASE_PUBLISHABLE_KEY, or VITE_SUPABASE_ANON_KEY in .env.
       </div>
     );
   }

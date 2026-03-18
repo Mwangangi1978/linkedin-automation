@@ -835,6 +835,18 @@ textarea {
   text-decoration: none;
 }
 
+.settings-actions-row {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.code-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  min-height: 160px;
+  white-space: pre;
+}
+
 .login-shell {
   min-height: 100vh;
   display: grid;
