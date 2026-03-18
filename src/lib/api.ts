@@ -73,6 +73,17 @@ export async function listTrackedProfiles() {
   return (data ?? []) as TrackedProfile[];
 }
 
+export async function getTrackedProfile(id: string) {
+  const { data, error } = await supabase
+    .from('tracked_profiles')
+    .select('id, profile_url, display_name, notes, is_active, post_lookback_days, max_posts_per_run, last_scraped_at, created_at')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data ?? null) as TrackedProfile | null;
+}
+
 export async function createTrackedProfile(payload: {
   profile_url: string;
   display_name: string;
@@ -147,9 +158,12 @@ export async function saveSettings(payload: Partial<SystemConfig>) {
   if (error) throw error;
 }
 
-export async function triggerRun(triggeredBy: 'manual' | 'schedule' = 'manual') {
+export async function triggerRun(triggeredBy: 'manual' | 'schedule' = 'manual', profileId?: string) {
   const { data, error } = await supabase.functions.invoke('run-pipeline', {
-    body: { triggeredBy },
+    body: {
+      triggeredBy,
+      profileId,
+    },
   });
   if (error) throw error;
   return data;

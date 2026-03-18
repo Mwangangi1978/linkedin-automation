@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Play, RefreshCw } from 'lucide-react';
-import { getDashboardStats, triggerRun } from '../lib/api';
+import { RefreshCw } from 'lucide-react';
+import { getDashboardStats } from '../lib/api';
 import type { ScrapeRun } from '../lib/models';
 
 interface DashboardStats {
@@ -14,7 +14,6 @@ interface DashboardStats {
 export function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -29,19 +28,6 @@ export function DashboardPage() {
   useEffect(() => {
     void load();
   }, []);
-
-  async function onRunNow() {
-    setRunning(true);
-    try {
-      await triggerRun('manual');
-      await load();
-      alert('Pipeline run started successfully.');
-    } catch (error) {
-      alert(`Failed to trigger run: ${String(error)}`);
-    } finally {
-      setRunning(false);
-    }
-  }
 
   const cards = [
     { label: 'Profiles Tracked', value: stats?.totalProfiles ?? 0 },
@@ -60,9 +46,6 @@ export function DashboardPage() {
         <div className="topbar-right">
           <button className="btn btn-secondary" onClick={load} disabled={loading}>
             <RefreshCw size={16} /> Refresh
-          </button>
-          <button className="btn btn-primary" onClick={onRunNow} disabled={running}>
-            <Play size={16} /> {running ? 'Running...' : 'Run Now'}
           </button>
         </div>
       </header>
@@ -95,7 +78,7 @@ export function DashboardPage() {
               <div><span>CRM failed</span><strong>{stats.lastRun.crm_pushes_failed}</strong></div>
             </div>
           ) : (
-            <p className="panel-subtitle">No runs yet. Click Run Now to start your first pipeline execution.</p>
+            <p className="panel-subtitle">No runs yet.</p>
           )}
         </article>
       </section>

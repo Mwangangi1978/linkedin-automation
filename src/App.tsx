@@ -8,6 +8,7 @@ import { LeadsPage } from './pages/LeadsPage';
 import { LoginPage } from './pages/LoginPage';
 import { RunHistoryPage } from './pages/RunHistoryPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { TrackedProfileDetailPage } from './pages/TrackedProfileDetailPage';
 import { TrackedProfilesPage } from './pages/TrackedProfilesPage';
 import { WorkflowBuilderPage } from './pages/WorkflowBuilderPage';
 
@@ -17,7 +18,10 @@ function AppRoutes() {
       <Route element={<AppShell />}>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/workflow" element={<WorkflowBuilderPage />} />
-        <Route path="/tracked-profiles" element={<TrackedProfilesPage />} />
+        <Route path="/tracked-profiles">
+          <Route index element={<TrackedProfilesPage />} />
+          <Route path=":profileId" element={<TrackedProfileDetailPage />} />
+        </Route>
         <Route path="/leads" element={<LeadsPage />} />
         <Route path="/run-history" element={<RunHistoryPage />} />
         <Route path="/integrations" element={<IntegrationsPage />} />

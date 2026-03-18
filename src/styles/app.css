@@ -674,6 +674,20 @@ textarea {
   color: var(--muted-foreground);
 }
 
+.profile-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.profile-link:hover {
+  text-decoration: underline;
+}
+
+.profile-name-link {
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .interval-badge {
   display: inline-flex;
   align-items: center;

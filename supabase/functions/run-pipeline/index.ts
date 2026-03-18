@@ -211,6 +211,7 @@ serve(async (req) => {
 
   const body = await req.json().catch(() => ({}));
   const triggeredBy = (body?.triggeredBy ?? 'manual') as TriggerMode;
+  const requestedProfileId = typeof body?.profileId === 'string' && body.profileId.trim() ? body.profileId.trim() : null;
 
   const summary: PipelineSummary = {
     profilesProcessed: 0,
@@ -244,9 +245,15 @@ serve(async (req) => {
 
     runId = run.id;
 
+    const profileQuery = supabaseAdmin.from('tracked_profiles').select('*').eq('is_active', true);
+
+    if (requestedProfileId) {
+      profileQuery.eq('id', requestedProfileId);
+    }
+
     const [{ data: config, error: configError }, { data: profiles, error: profileError }, { data: hooks, error: hooksError }] = await Promise.all([
       supabaseAdmin.from('system_config').select('*').eq('id', true).single(),
-      supabaseAdmin.from('tracked_profiles').select('*').eq('is_active', true),
+      profileQuery,
       supabaseAdmin.from('zapier_hooks').select('id, name, webhook_url, auth_header, api_key, lookback_days, is_active').eq('is_active', true),
     ]);
 
@@ -256,6 +263,10 @@ serve(async (req) => {
 
     if (profileError) {
       throw profileError;
+    }
+
+    if (requestedProfileId && (!profiles || profiles.length === 0)) {
+      return jsonResponse({ error: 'Requested profile is missing or inactive' }, 404);
     }
 
     if (hooksError) {

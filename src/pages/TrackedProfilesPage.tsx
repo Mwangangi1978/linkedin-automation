@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CircleHelp, Download, Link, Linkedin, Plus } from 'lucide-react';
+import { CircleHelp, Download, Link as LinkIcon, Linkedin, Plus } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { createTrackedProfile, listTrackedProfiles, toggleProfileIntegration } from '../lib/api';
 import type { TrackedProfile } from '../lib/models';
 import { formatRelativeLabel, truncate } from '../lib/utils';
@@ -133,7 +134,7 @@ export function TrackedProfilesPage() {
                   </p>
                 </div>
                 <div className="chip">
-                  <Link size={12} />
+                  <LinkIcon size={12} />
                   <HelpText label="Source config" description="Core settings that define how this profile is scraped." />
                 </div>
               </div>
@@ -228,16 +229,25 @@ export function TrackedProfilesPage() {
                       <div className="profile-main">
                         <div className="avatar-placeholder">{(row.display_name ?? 'P').slice(0, 1).toUpperCase()}</div>
                         <div className="profile-name-wrap">
-                          <div className="profile-name">{row.display_name ?? 'Unnamed profile'}</div>
+                          <Link to={`/tracked-profiles/${row.id}`} className="profile-link profile-name-link">
+                            {row.display_name ?? 'Unnamed profile'}
+                          </Link>
                           <div className="profile-meta">Max posts/run: {row.max_posts_per_run}</div>
                         </div>
                       </div>
                     </div>
-                    <div className="profile-cell url-text">{truncate(row.profile_url, 52)}</div>
+                    <div className="profile-cell url-text">
+                      <Link to={`/tracked-profiles/${row.id}`} className="profile-link">
+                        {truncate(row.profile_url, 52)}
+                      </Link>
+                    </div>
                     <div className="profile-cell"><span className="interval-badge">{row.post_lookback_days} days</span></div>
                     <div className="profile-cell muted-copy">{formatRelativeLabel(row.last_scraped_at)}</div>
                     <div className="profile-cell">
-                      <button className={`pill-status ${row.is_active ? 'active' : 'paused'}`} onClick={() => void toggleState(row)}>
+                      <button className={`pill-status ${row.is_active ? 'active' : 'paused'}`} onClick={(event) => {
+                        event.stopPropagation();
+                        void toggleState(row);
+                      }}>
                         <span className={`toggle ${row.is_active ? 'on' : ''}`} /> {row.is_active ? 'On' : 'Off'}
                       </button>
                     </div>
@@ -271,12 +281,12 @@ export function TrackedProfilesPage() {
                 </div>
                 <div className="queue-list">
                   {rows.slice(0, 3).map((row) => (
-                    <div key={row.id} className="queue-item">
+                    <Link key={row.id} to={`/tracked-profiles/${row.id}`} className="queue-item profile-link">
                       <div className="queue-copy">
                         <div className="queue-title">{row.display_name ?? row.profile_url}</div>
                         <div className="queue-text">Lookback {row.post_lookback_days} days • max {row.max_posts_per_run} posts/run</div>
                       </div>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               </div>
