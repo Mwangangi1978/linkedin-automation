@@ -830,6 +830,11 @@ textarea {
   padding: 8px 10px;
 }
 
+.settings-helper-link {
+  width: fit-content;
+  text-decoration: none;
+}
+
 .login-shell {
   min-height: 100vh;
   display: grid;
