@@ -6,6 +6,7 @@ export interface CrmPushInput {
   comment_text?: string | null;
   source_post_url?: string | null;
   source_leader_name?: string | null;
+  source_profile_url?: string | null;
   date_discovered: string;
 }
 
