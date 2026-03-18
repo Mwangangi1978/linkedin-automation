@@ -1,10 +1,36 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, Link, Linkedin, Plus } from 'lucide-react';
+import { CircleHelp, Download, Link, Linkedin, Plus } from 'lucide-react';
 import { createTrackedProfile, listTrackedProfiles, toggleProfileIntegration } from '../lib/api';
 import type { TrackedProfile } from '../lib/models';
 import { formatRelativeLabel, truncate } from '../lib/utils';
 
-const intervalOptions = [2, 4, 6, 12];
+const intervalOptions = [
+  { value: '2h', label: 'Every 2 hrs' },
+  { value: '4h', label: 'Every 4 hrs' },
+  { value: '6h', label: 'Every 6 hrs' },
+  { value: '12h', label: 'Every 12 hrs' },
+  { value: '1d', label: 'Every day' },
+  { value: '2d', label: 'Every 2 days' },
+  { value: '1w', label: 'Every week' },
+  { value: '2w', label: 'Every 2 weeks' },
+];
+
+type HelpTextProps = {
+  label: string;
+  description: string;
+};
+
+function HelpText({ label, description }: HelpTextProps) {
+  return (
+    <span className="label-with-help">
+      <span>{label}</span>
+      <span className="help-trigger" tabIndex={0} aria-label={`${label} help`}>
+        <CircleHelp size={14} />
+        <span className="help-bubble" role="tooltip">{description}</span>
+      </span>
+    </span>
+  );
+}
 
 export function TrackedProfilesPage() {
   const [rows, setRows] = useState<TrackedProfile[]>([]);
@@ -99,29 +125,42 @@ export function TrackedProfilesPage() {
             <div className="panel">
               <div className="panel-header">
                 <div className="panel-title-wrap">
-                  <h3 className="panel-title">Add tracked profile</h3>
-                  <p className="panel-subtitle">Store LinkedIn URL, lookback days, and caps per run.</p>
+                  <h3 className="panel-title">
+                    <HelpText label="Add tracked profile" description="Create a source profile record for your scraping workflow." />
+                  </h3>
+                  <p className="panel-subtitle">
+                    <HelpText label="Store LinkedIn URL, lookback days, and caps per run." description="This saves the profile URL, how far back to fetch posts, and how many posts to process each run." />
+                  </p>
                 </div>
-                <div className="chip"><Link size={12} /> Source config</div>
+                <div className="chip">
+                  <Link size={12} />
+                  <HelpText label="Source config" description="Core settings that define how this profile is scraped." />
+                </div>
               </div>
 
               <div className="form-stack">
                 <div className="field-row">
                   <div className="field-group">
-                    <label className="field-label">Profile URL</label>
+                    <label className="field-label">
+                      <HelpText label="Profile URL" description="The public LinkedIn profile link to monitor." />
+                    </label>
                     <div className="field-surface">
                       <Linkedin size={16} className="field-icon" />
-                      <input value={profileUrl} onChange={(e) => setProfileUrl(e.target.value)} placeholder="https://www.linkedin.com/in/username" />
+                      <input value={profileUrl} onChange={(e) => setProfileUrl(e.target.value)} placeholder="https://www.linkedin.com/in/username" aria-label="https://www.linkedin.com/in/username" />
                     </div>
                   </div>
                   <div className="field-group">
-                    <label className="field-label">Lookback</label>
+                    <label className="field-label">
+                      <HelpText label="Lookback" description="How many recent days of posts to include when scraping this profile." />
+                    </label>
                     <div className="field-surface">
                       <input type="number" min={1} max={90} value={lookbackDays} onChange={(e) => setLookbackDays(Number(e.target.value))} />
                     </div>
                   </div>
                   <div className="field-group">
-                    <label className="field-label">Max posts/run</label>
+                    <label className="field-label">
+                      <HelpText label="Max posts/run" description="The maximum number of posts to process from this profile in one pipeline run." />
+                    </label>
                     <div className="field-surface">
                       <input type="number" min={1} max={500} value={maxPosts} onChange={(e) => setMaxPosts(Number(e.target.value))} />
                     </div>
@@ -129,30 +168,38 @@ export function TrackedProfilesPage() {
                 </div>
                 <div className="field-row">
                   <div className="field-group">
-                    <label className="field-label">Display name</label>
+                    <label className="field-label">
+                      <HelpText label="Display name" description="Friendly name shown in your dashboard and queue views." />
+                    </label>
                     <div className="field-surface">
                       <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="e.g. Daniel Harper" />
                     </div>
                   </div>
                   <div className="field-group">
-                    <label className="field-label">Notes</label>
+                    <label className="field-label">
+                      <HelpText label="Notes" description="Optional context for this source, such as campaign or outreach segment." />
+                    </label>
                     <div className="field-surface">
                       <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Founder outreach list" />
                     </div>
                   </div>
                   <div className="field-group">
-                    <label className="field-label">Presets</label>
+                    <label className="field-label">
+                      <HelpText label="Presets" description="Quick interval defaults you can pick in hours, days, or weeks." />
+                    </label>
                     <div className="field-surface">
-                      <select defaultValue={4}>
+                      <select defaultValue="4h">
                         {intervalOptions.map((option) => (
-                          <option key={option} value={option}>Every {option} hrs</option>
+                          <option key={option.value} value={option.value}>{option.label}</option>
                         ))}
                       </select>
                     </div>
                   </div>
                 </div>
                 <div className="form-actions">
-                  <p className="helper-text">Tip: weekly runs usually work best with 14-30 day lookback windows.</p>
+                  <p className="helper-text">
+                    <HelpText label="Tip: weekly runs usually work best with 14-30 day lookback windows." description="If you run once per week, a 14-30 day lookback helps avoid missing posts between runs." />
+                  </p>
                   <button className="btn btn-primary" onClick={onAddProfile} disabled={saving}><Plus size={14} /> Save profile</button>
                 </div>
               </div>
@@ -202,14 +249,18 @@ export function TrackedProfilesPage() {
             <div className="side-stack">
               <div className="panel">
                 <div className="panel-title-wrap">
-                  <h3 className="panel-title">Interval presets</h3>
-                  <p className="panel-subtitle">Quick defaults for account activity levels.</p>
+                  <h3 className="panel-title">
+                    <HelpText label="Interval presets" description="Suggested monitoring cadences you can apply by account posting frequency." />
+                  </h3>
+                  <p className="panel-subtitle">
+                    <HelpText label="Quick defaults for account activity levels." description="Pick a recommended interval based on how often a profile typically posts." />
+                  </p>
                 </div>
                 <div className="summary-list">
-                  <div className="summary-item"><span className="summary-label">High-volume creators</span><span className="summary-value">Every 2 hrs</span></div>
-                  <div className="summary-item"><span className="summary-label">Founders & operators</span><span className="summary-value">Every 4 hrs</span></div>
-                  <div className="summary-item"><span className="summary-label">Niche experts</span><span className="summary-value">Every 6 hrs</span></div>
-                  <div className="summary-item"><span className="summary-label">Low-frequency accounts</span><span className="summary-value">Every 12 hrs</span></div>
+                  <div className="summary-item"><span className="summary-label">High-volume creators</span><span className="summary-value">Every 2 days</span></div>
+                  <div className="summary-item"><span className="summary-label">Founders & operators</span><span className="summary-value">Every 4 days</span></div>
+                  <div className="summary-item"><span className="summary-label">Niche experts</span><span className="summary-value">Every week</span></div>
+                  <div className="summary-item"><span className="summary-label">Low-frequency accounts</span><span className="summary-value">Every 2 weeks</span></div>
                 </div>
               </div>
 

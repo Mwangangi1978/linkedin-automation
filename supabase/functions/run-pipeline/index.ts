@@ -1,3 +1,4 @@
+/// <reference path="../_shared/deno-shims.d.ts" />
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { scrapePostComments, scrapeProfilePosts } from '../_shared/apify.ts';
 import { pushLeadToCrm } from '../_shared/crm.ts';

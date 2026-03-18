@@ -1,3 +1,4 @@
+/// <reference path="./deno-shims.d.ts" />
 import { ApifyClient } from 'npm:apify-client@2.12.0';
 import type { ApifyCommentItem, ApifyPostItem } from './types.ts';
 

@@ -530,6 +530,47 @@ textarea {
   font-weight: 600;
 }
 
+.label-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.help-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: var(--secondary-foreground);
+  cursor: help;
+}
+
+.help-bubble {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 8px);
+  transform: translateX(-50%);
+  min-width: 220px;
+  max-width: 280px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--card-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.help-trigger:hover .help-bubble,
+.help-trigger:focus-visible .help-bubble {
+  opacity: 1;
+  visibility: visible;
+}
+
 .field-surface {
   min-height: 42px;
   padding: 8px 10px;
