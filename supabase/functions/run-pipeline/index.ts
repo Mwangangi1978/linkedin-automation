@@ -48,6 +48,32 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+async function requireAuthenticatedRequest(req: Request) {
+  const authorization = req.headers.get('authorization') ?? req.headers.get('Authorization');
+  const token = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length).trim() : null;
+
+  if (!token) {
+    return {
+      userId: null,
+      response: jsonResponse({ error: 'Missing bearer token' }, 401),
+    };
+  }
+
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+
+  if (error || !data.user) {
+    return {
+      userId: null,
+      response: jsonResponse({ error: 'Invalid or expired session token' }, 401),
+    };
+  }
+
+  return {
+    userId: data.user.id,
+    response: null,
+  };
+}
+
 function safeExcerpt(text?: string, max = 300) {
   if (!text) {
     return null;
@@ -237,6 +263,11 @@ serve(async (req) => {
 
   if (req.method !== 'POST') {
     return jsonResponse({ error: 'Method not allowed' }, 405);
+  }
+
+  const auth = await requireAuthenticatedRequest(req);
+  if (auth.response) {
+    return auth.response;
   }
 
   const body = await req.json().catch(() => ({}));

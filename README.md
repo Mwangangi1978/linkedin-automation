@@ -70,6 +70,14 @@ Deploy `supabase/functions/run-pipeline` with secrets:
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 
+Deploy command (important for browser-triggered runs from `http://localhost:5173`):
+
+```bash
+supabase functions deploy run-pipeline --no-verify-jwt
+```
+
+Why: browser preflight `OPTIONS` requests do not include your user JWT; disabling gateway JWT verification avoids preflight `401`/`403` CORS failures. The function still validates bearer tokens on `POST` internally.
+
 The function:
 
 - acquires run lock

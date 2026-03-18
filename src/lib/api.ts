@@ -1,6 +1,8 @@
 import type { ScrapeRun, ScrapedAuthor, SystemConfig, TrackedProfile, ZapierHook } from './models';
 import { supabase } from './supabase';
 
+const pipelineFunctionName = import.meta.env.VITE_PIPELINE_FUNCTION_NAME?.trim() || 'link-scraper';
+
 async function requireAuthenticatedSession() {
   const { data, error } = await supabase.auth.getUser();
 
@@ -211,32 +213,20 @@ export async function saveSettings(payload: Partial<SystemConfig>) {
 }
 
 export async function triggerRun(triggeredBy: 'manual' | 'schedule' = 'manual', profileId?: string) {
-  const payload = {
-    triggeredBy,
-    profileId,
-  };
-
-  const primary = await supabase.functions.invoke('run-pipeline', {
+  const { data, error } = await supabase.functions.invoke(pipelineFunctionName, {
     body: {
-      ...payload,
+      triggeredBy,
+      profileId,
     },
   });
-
-  if (!primary.error) {
-    return primary.data;
+  if (error) {
+    const status = error.context?.status;
+    if (status === 409) {
+      throw new Error('A scrape run is already in progress. Please wait for it to finish before starting another run.');
+    }
+    throw error;
   }
-
-  const fallback = await supabase.functions.invoke('link-scraper', {
-    body: {
-      ...payload,
-    },
-  });
-
-  if (fallback.error) {
-    throw primary.error;
-  }
-
-  return fallback.data;
+  return data;
 }
 
 export async function retryFailedCrmPushes(limit = 100) {
