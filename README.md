@@ -52,7 +52,7 @@ npm run dev
 
 ## Supabase Setup
 
-Run migration from `supabase/migrations/202603180001_init.sql`.
+Run all SQL files in `supabase/migrations/` in filename order.
 
 This creates:
 

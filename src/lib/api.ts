@@ -1,6 +1,14 @@
 import type { ScrapeRun, ScrapedAuthor, SystemConfig, TrackedProfile, ZapierHook } from './models';
 import { supabase } from './supabase';
 
+async function requireAuthenticatedSession() {
+  const { data, error } = await supabase.auth.getUser();
+
+  if (error || !data.user) {
+    throw new Error('Your Supabase session is missing or expired. Please sign in again.');
+  }
+}
+
 async function ensureSystemConfigRow() {
   const { data, error } = await supabase
     .from('system_config')
@@ -73,16 +81,22 @@ export async function createTrackedProfile(payload: {
   notes?: string;
   is_active?: boolean;
 }) {
+  await requireAuthenticatedSession();
+
   const { error } = await supabase.from('tracked_profiles').insert(payload);
   if (error) throw error;
 }
 
 export async function updateTrackedProfile(id: string, payload: Partial<TrackedProfile>) {
+  await requireAuthenticatedSession();
+
   const { error } = await supabase.from('tracked_profiles').update(payload).eq('id', id);
   if (error) throw error;
 }
 
 export async function toggleProfileIntegration(id: string, enabled: boolean) {
+  await requireAuthenticatedSession();
+
   const { error } = await supabase
     .from('tracked_profiles')
     .update({ is_active: enabled })
