@@ -1,4 +1,4 @@
-import type { ScrapeRun, ScrapedAuthor, SystemConfig, TrackedProfile } from './models';
+import type { ScrapeRun, ScrapedAuthor, SystemConfig, TrackedProfile, ZapierHook } from './models';
 import { supabase } from './supabase';
 
 async function ensureSystemConfigRow() {
@@ -143,13 +143,70 @@ export async function triggerRun(triggeredBy: 'manual' | 'schedule' = 'manual') 
 
 export async function retryFailedCrmPushes(limit = 100) {
   const { data, error } = await supabase
-    .from('scraped_authors')
-    .update({ crm_push_status: 'pending' })
-    .eq('crm_push_status', 'failed')
-    .lt('crm_failure_count', 3)
+    .from('zapier_hook_deliveries')
+    .update({ status: 'pending', error: null })
+    .eq('status', 'failed')
+    .lt('failure_count', 3)
     .limit(limit)
-    .select('id');
+    .select('id, author_id');
 
   if (error) throw error;
+
+  const authorIds = Array.from(new Set((data ?? []).map((row) => row.author_id).filter(Boolean)));
+  if (authorIds.length > 0) {
+    await supabase
+      .from('scraped_authors')
+      .update({ crm_push_status: 'pending' })
+      .in('id', authorIds);
+  }
+
   return data?.length ?? 0;
+}
+
+export async function listZapierHooks() {
+  const { data, error } = await supabase
+    .from('zapier_hooks')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return (data ?? []) as ZapierHook[];
+}
+
+export async function createZapierHook(payload: {
+  name: string;
+  webhook_url: string;
+  auth_header?: string;
+  api_key?: string | null;
+  lookback_days: number;
+  is_active?: boolean;
+}) {
+  const { error } = await supabase.from('zapier_hooks').insert({
+    name: payload.name,
+    webhook_url: payload.webhook_url,
+    auth_header: payload.auth_header ?? 'Authorization',
+    api_key: payload.api_key ?? null,
+    lookback_days: payload.lookback_days,
+    is_active: payload.is_active ?? true,
+  });
+
+  if (error) throw error;
+}
+
+export async function updateZapierHook(id: string, payload: Partial<ZapierHook>) {
+  const { error } = await supabase
+    .from('zapier_hooks')
+    .update(payload)
+    .eq('id', id);
+
+  if (error) throw error;
+}
+
+export async function deleteZapierHook(id: string) {
+  const { error } = await supabase
+    .from('zapier_hooks')
+    .delete()
+    .eq('id', id);
+
+  if (error) throw error;
 }

@@ -58,3 +58,15 @@ export interface SystemConfig {
   crm_api_key: string | null;
   crm_auth_header: string;
 }
+
+export interface ZapierHook {
+  id: string;
+  name: string;
+  webhook_url: string;
+  auth_header: string;
+  api_key: string | null;
+  lookback_days: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}

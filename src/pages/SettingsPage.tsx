@@ -4,10 +4,6 @@ import { getSettings, saveSettings } from '../lib/api';
 import type { SystemConfig } from '../lib/models';
 
 const defaultState: Partial<SystemConfig> = {
-  default_schedule: '0 8 * * *',
-  schedule_enabled: false,
-  default_post_lookback_days: 30,
-  default_comment_count_limit: 100,
   apify_token: '',
   linkedin_cookies: '',
   linkedin_user_agent: '',
@@ -15,9 +11,6 @@ const defaultState: Partial<SystemConfig> = {
   apify_comment_sort_type: 'RELEVANCE',
   apify_min_delay: 2,
   apify_max_delay: 7,
-  crm_endpoint: '',
-  crm_api_key: '',
-  crm_auth_header: 'Authorization',
 };
 
 export function SettingsPage() {
@@ -36,7 +29,15 @@ export function SettingsPage() {
     event.preventDefault();
     setSaving(true);
     try {
-      await saveSettings(form);
+      await saveSettings({
+        apify_token: form.apify_token ?? '',
+        linkedin_user_agent: form.linkedin_user_agent ?? '',
+        proxy_country: form.proxy_country ?? '',
+        apify_comment_sort_type: form.apify_comment_sort_type ?? 'RELEVANCE',
+        apify_min_delay: form.apify_min_delay ?? 2,
+        apify_max_delay: form.apify_max_delay ?? 7,
+        linkedin_cookies: form.linkedin_cookies ?? '',
+      });
       alert('Settings saved.');
     } catch (error) {
       alert(`Unable to save settings: ${String(error)}`);
@@ -57,10 +58,11 @@ export function SettingsPage() {
       <section className="page-shell">
         <form className="panel settings-form" onSubmit={onSave}>
           <div className="panel-title-wrap">
-            <h2 className="panel-title">Apify and CRM Configuration</h2>
+            <h2 className="panel-title">Apify Configuration</h2>
             <p className="panel-subtitle">
               Insert your Apify API token here. The pipeline reads these values to run
-              profile post scraping and comment scraping.
+              profile post scraping and comment scraping. Zapier connection settings are
+              managed in Integrations.
             </p>
           </div>
 
@@ -77,12 +79,6 @@ export function SettingsPage() {
             <label>Min Delay (seconds)<input type="number" min={0} value={form.apify_min_delay ?? 2} onChange={(e) => setValue('apify_min_delay', Number(e.target.value))} /></label>
             <label>Max Delay (seconds)<input type="number" min={0} value={form.apify_max_delay ?? 7} onChange={(e) => setValue('apify_max_delay', Number(e.target.value))} /></label>
             <label className="span-two">LinkedIn Cookies<textarea value={form.linkedin_cookies ?? ''} onChange={(e) => setValue('linkedin_cookies', e.target.value)} rows={4} /></label>
-            <label>CRM Endpoint<input value={form.crm_endpoint ?? ''} onChange={(e) => setValue('crm_endpoint', e.target.value)} /></label>
-            <label>CRM API Key<input type="password" value={form.crm_api_key ?? ''} onChange={(e) => setValue('crm_api_key', e.target.value)} /></label>
-            <label>Auth Header<input value={form.crm_auth_header ?? 'Authorization'} onChange={(e) => setValue('crm_auth_header', e.target.value)} /></label>
-            <label>Default Schedule<input value={form.default_schedule ?? ''} onChange={(e) => setValue('default_schedule', e.target.value)} /></label>
-            <label>Default Lookback Days<input type="number" value={form.default_post_lookback_days ?? 30} onChange={(e) => setValue('default_post_lookback_days', Number(e.target.value))} /></label>
-            <label>Default Comment Limit<input type="number" value={form.default_comment_count_limit ?? 100} onChange={(e) => setValue('default_comment_count_limit', Number(e.target.value))} /></label>
           </div>
           <button className="btn btn-primary" disabled={saving}>{saving ? 'Saving...' : 'Save settings'}</button>
         </form>

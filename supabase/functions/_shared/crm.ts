@@ -17,10 +17,10 @@ export interface CrmPushConfig {
 }
 
 export async function pushLeadToCrm(payload: CrmPushInput, config: CrmPushConfig) {
-  if (!config.endpoint || !config.apiKey) {
+  if (!config.endpoint) {
     return {
       ok: false,
-      error: 'Missing CRM endpoint or API key',
+      error: 'Missing Zapier webhook endpoint',
     };
   }
 
@@ -28,8 +28,10 @@ export async function pushLeadToCrm(payload: CrmPushInput, config: CrmPushConfig
     'content-type': 'application/json',
   });
 
-  const authHeader = config.authHeader || 'Authorization';
-  headers.set(authHeader, authHeader.toLowerCase() === 'authorization' ? `Bearer ${config.apiKey}` : config.apiKey);
+  if (config.apiKey) {
+    const authHeader = config.authHeader || 'Authorization';
+    headers.set(authHeader, authHeader.toLowerCase() === 'authorization' ? `Bearer ${config.apiKey}` : config.apiKey);
+  }
 
   const response = await fetch(config.endpoint, {
     method: 'POST',

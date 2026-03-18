@@ -5,6 +5,33 @@ import { pushLeadToCrm } from '../_shared/crm.ts';
 import { supabaseAdmin } from '../_shared/supabaseAdmin.ts';
 import type { PipelineSummary, TriggerMode } from '../_shared/types.ts';
 
+interface ZapierHookRow {
+  id: string;
+  name: string;
+  webhook_url: string;
+  auth_header: string;
+  api_key: string | null;
+  lookback_days: number;
+  is_active: boolean;
+}
+
+interface ScrapedAuthorRow {
+  id: string;
+  linkedin_profile_url: string;
+  first_name: string | null;
+  last_name: string | null;
+  comment_text: string | null;
+  source_post_url: string | null;
+  source_leader_profile_url: string | null;
+  created_at: string;
+}
+
+interface DeliveryRow {
+  author_id: string;
+  failure_count: number;
+  status: 'pending' | 'pushed' | 'failed' | 'skipped';
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -26,51 +53,153 @@ async function updateRun(runId: string, partial: Record<string, unknown>) {
   }
 }
 
-async function processFailedCrmRetries(summary: PipelineSummary, crmConfig: { endpoint?: string | null; apiKey?: string | null; authHeader?: string | null; }) {
-  const { data: failedRows, error } = await supabaseAdmin
-    .from('scraped_authors')
-    .select('id, linkedin_profile_url, first_name, last_name, comment_text, source_post_url, source_leader_profile_url, created_at, crm_failure_count, crm_record_id')
-    .eq('crm_push_status', 'failed')
-    .lt('crm_failure_count', 3)
-    .is('crm_record_id', null)
-    .limit(500);
+async function sendAuthorToHook(summary: PipelineSummary, hook: ZapierHookRow, author: ScrapedAuthorRow, existingFailureCount = 0) {
+  const deliveryResult = await pushLeadToCrm(
+    {
+      first_name: author.first_name,
+      last_name: author.last_name,
+      linkedin_url: author.linkedin_profile_url,
+      lead_source: `LinkedIn Comment Scraper (${hook.name})`,
+      comment_text: author.comment_text?.slice(0, 500) ?? null,
+      source_post_url: author.source_post_url,
+      source_leader_name: author.source_leader_profile_url,
+      source_profile_url: author.source_leader_profile_url,
+      date_discovered: author.created_at,
+    },
+    {
+      endpoint: hook.webhook_url,
+      apiKey: hook.api_key,
+      authHeader: hook.auth_header,
+    },
+  );
 
-  if (error || !failedRows?.length) {
+  if (deliveryResult.ok) {
+    summary.crmPushesSucceeded += 1;
+    await supabaseAdmin.from('zapier_hook_deliveries').upsert(
+      {
+        hook_id: hook.id,
+        author_id: author.id,
+        status: 'pushed',
+        failure_count: 0,
+        error: null,
+        pushed_at: new Date().toISOString(),
+      },
+      { onConflict: 'hook_id,author_id' },
+    );
+
+    await supabaseAdmin.from('scraped_authors').update({
+      crm_push_status: 'pushed',
+      crm_pushed_at: new Date().toISOString(),
+      crm_record_id: deliveryResult.crmRecordId,
+      crm_error: null,
+      crm_failure_count: 0,
+    }).eq('id', author.id);
+
     return;
   }
 
-  for (const row of failedRows) {
-    const crmResult = await pushLeadToCrm(
-      {
-        first_name: row.first_name,
-        last_name: row.last_name,
-        linkedin_url: row.linkedin_profile_url,
-        lead_source: 'LinkedIn Comment Scraper',
-        comment_text: row.comment_text?.slice(0, 500) ?? null,
-        source_post_url: row.source_post_url,
-        source_leader_name: row.source_leader_profile_url,
-        source_profile_url: row.source_leader_profile_url,
-        date_discovered: row.created_at,
-      },
-      crmConfig,
-    );
+  summary.crmPushesFailed += 1;
+  const nextFailureCount = existingFailureCount + 1;
+  const status = nextFailureCount >= 3 ? 'skipped' : 'failed';
 
-    if (crmResult.ok) {
-      summary.crmPushesSucceeded += 1;
-      await supabaseAdmin.from('scraped_authors').update({
-        crm_push_status: 'pushed',
-        crm_pushed_at: new Date().toISOString(),
-        crm_record_id: crmResult.crmRecordId,
-        crm_error: null,
-      }).eq('id', row.id);
-    } else {
-      summary.crmPushesFailed += 1;
-      const nextFailureCount = row.crm_failure_count + 1;
-      await supabaseAdmin.from('scraped_authors').update({
-        crm_push_status: nextFailureCount >= 3 ? 'skipped' : 'failed',
-        crm_error: crmResult.error,
-        crm_failure_count: nextFailureCount,
-      }).eq('id', row.id);
+  await supabaseAdmin.from('zapier_hook_deliveries').upsert(
+    {
+      hook_id: hook.id,
+      author_id: author.id,
+      status,
+      failure_count: nextFailureCount,
+      error: deliveryResult.error ?? 'Unknown webhook error',
+      pushed_at: null,
+    },
+    { onConflict: 'hook_id,author_id' },
+  );
+
+  await supabaseAdmin.from('scraped_authors').update({
+    crm_push_status: status,
+    crm_error: deliveryResult.error,
+    crm_failure_count: nextFailureCount,
+  }).eq('id', author.id);
+}
+
+async function processFailedHookRetries(summary: PipelineSummary, hooks: ZapierHookRow[]) {
+  for (const hook of hooks) {
+    const { data: failedDeliveries, error: deliveryError } = await supabaseAdmin
+      .from('zapier_hook_deliveries')
+      .select('author_id, failure_count, status')
+      .eq('hook_id', hook.id)
+      .eq('status', 'failed')
+      .lt('failure_count', 3)
+      .limit(500);
+
+    const typedFailedDeliveries = (failedDeliveries ?? []) as DeliveryRow[];
+
+    if (deliveryError || typedFailedDeliveries.length === 0) {
+      continue;
+    }
+
+    const authorIds = typedFailedDeliveries.map((row) => row.author_id);
+    const { data: retryAuthors, error: retryAuthorError } = await supabaseAdmin
+      .from('scraped_authors')
+      .select('id, linkedin_profile_url, first_name, last_name, comment_text, source_post_url, source_leader_profile_url, created_at')
+      .in('id', authorIds);
+
+    if (retryAuthorError || !retryAuthors?.length) {
+      continue;
+    }
+
+    const failureCountByAuthorId = new Map<string, number>(typedFailedDeliveries.map((row) => [row.author_id, row.failure_count]));
+
+    for (const author of retryAuthors as ScrapedAuthorRow[]) {
+      const existingFailureCount: number = failureCountByAuthorId.get(author.id) ?? 0;
+      await sendAuthorToHook(summary, hook, author, existingFailureCount);
+    }
+  }
+}
+
+async function processHookLookbackDeliveries(summary: PipelineSummary, hooks: ZapierHookRow[]) {
+  for (const hook of hooks) {
+    const lookbackDate = new Date();
+    lookbackDate.setDate(lookbackDate.getDate() - Math.max(1, hook.lookback_days));
+
+    const { data: authorsInWindow, error: authorsError } = await supabaseAdmin
+      .from('scraped_authors')
+      .select('id, linkedin_profile_url, first_name, last_name, comment_text, source_post_url, source_leader_profile_url, created_at')
+      .gte('created_at', lookbackDate.toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1000);
+
+    const typedAuthorsInWindow = (authorsInWindow ?? []) as ScrapedAuthorRow[];
+
+    if (authorsError || typedAuthorsInWindow.length === 0) {
+      continue;
+    }
+
+    const authorIds = typedAuthorsInWindow.map((author) => author.id);
+    const { data: existingDeliveries, error: deliveriesError } = await supabaseAdmin
+      .from('zapier_hook_deliveries')
+      .select('author_id, status, failure_count')
+      .eq('hook_id', hook.id)
+      .in('author_id', authorIds);
+
+    if (deliveriesError) {
+      continue;
+    }
+
+    const typedExistingDeliveries = (existingDeliveries ?? []) as DeliveryRow[];
+    const existingByAuthorId = new Map<string, DeliveryRow>(typedExistingDeliveries.map((delivery) => [delivery.author_id, delivery]));
+
+    for (const author of typedAuthorsInWindow) {
+      const existing = existingByAuthorId.get(author.id);
+
+      if (existing?.status === 'pushed' || existing?.status === 'skipped') {
+        continue;
+      }
+
+      if (existing?.status === 'failed') {
+        continue;
+      }
+
+      await sendAuthorToHook(summary, hook, author, existing?.failure_count ?? 0);
     }
   }
 }
@@ -115,9 +244,10 @@ serve(async (req) => {
 
     runId = run.id;
 
-    const [{ data: config, error: configError }, { data: profiles, error: profileError }] = await Promise.all([
+    const [{ data: config, error: configError }, { data: profiles, error: profileError }, { data: hooks, error: hooksError }] = await Promise.all([
       supabaseAdmin.from('system_config').select('*').eq('id', true).single(),
       supabaseAdmin.from('tracked_profiles').select('*').eq('is_active', true),
+      supabaseAdmin.from('zapier_hooks').select('id, name, webhook_url, auth_header, api_key, lookback_days, is_active').eq('is_active', true),
     ]);
 
     if (configError || !config) {
@@ -126,6 +256,10 @@ serve(async (req) => {
 
     if (profileError) {
       throw profileError;
+    }
+
+    if (hooksError) {
+      throw hooksError;
     }
 
     const apifyConfig = {
@@ -144,13 +278,7 @@ serve(async (req) => {
       throw new Error('Missing Apify or LinkedIn credentials in settings');
     }
 
-    const crmConfig = {
-      endpoint: config.crm_endpoint,
-      apiKey: config.crm_api_key,
-      authHeader: config.crm_auth_header,
-    };
-
-    await processFailedCrmRetries(summary, crmConfig);
+    await processFailedHookRetries(summary, (hooks ?? []) as ZapierHookRow[]);
 
     for (const profile of profiles ?? []) {
       summary.profilesProcessed += 1;
@@ -247,43 +375,13 @@ serve(async (req) => {
 
           summary.newUniqueAuthors += 1;
 
-          const crmResult = await pushLeadToCrm(
-            {
-              first_name: comment.author?.firstName ?? null,
-              last_name: comment.author?.lastName ?? null,
-              linkedin_url: authorUrl,
-              lead_source: 'LinkedIn Comment Scraper',
-              comment_text: comment.text?.slice(0, 500) ?? null,
-              source_post_url: post.url,
-              source_leader_name: profile.display_name ?? profile.profile_url,
-              source_profile_url: profile.profile_url,
-              date_discovered: new Date().toISOString(),
-            },
-            crmConfig,
-          );
-
-          if (crmResult.ok) {
-            summary.crmPushesSucceeded += 1;
-            await supabaseAdmin
-              .from('scraped_authors')
-              .update({
-                crm_push_status: 'pushed',
-                crm_pushed_at: new Date().toISOString(),
-                crm_record_id: crmResult.crmRecordId,
-                crm_error: null,
-              })
-              .eq('linkedin_profile_url', authorUrl);
-          } else {
-            summary.crmPushesFailed += 1;
-            await supabaseAdmin
-              .from('scraped_authors')
-              .update({
-                crm_push_status: 'failed',
-                crm_error: crmResult.error,
-                crm_failure_count: 1,
-              })
-              .eq('linkedin_profile_url', authorUrl);
-          }
+          await supabaseAdmin
+            .from('scraped_authors')
+            .update({
+              crm_push_status: 'pending',
+              crm_error: null,
+            })
+            .eq('linkedin_profile_url', authorUrl);
         }
 
         await supabaseAdmin
@@ -297,6 +395,8 @@ serve(async (req) => {
         .update({ last_scraped_at: new Date().toISOString() })
         .eq('id', profile.id);
     }
+
+      await processHookLookbackDeliveries(summary, (hooks ?? []) as ZapierHookRow[]);
 
     await updateRun(runId, {
       completed_at: new Date().toISOString(),
