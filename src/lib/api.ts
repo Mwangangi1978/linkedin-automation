@@ -211,14 +211,32 @@ export async function saveSettings(payload: Partial<SystemConfig>) {
 }
 
 export async function triggerRun(triggeredBy: 'manual' | 'schedule' = 'manual', profileId?: string) {
-  const { data, error } = await supabase.functions.invoke('run-pipeline', {
+  const payload = {
+    triggeredBy,
+    profileId,
+  };
+
+  const primary = await supabase.functions.invoke('run-pipeline', {
     body: {
-      triggeredBy,
-      profileId,
+      ...payload,
     },
   });
-  if (error) throw error;
-  return data;
+
+  if (!primary.error) {
+    return primary.data;
+  }
+
+  const fallback = await supabase.functions.invoke('link-scraper', {
+    body: {
+      ...payload,
+    },
+  });
+
+  if (fallback.error) {
+    throw primary.error;
+  }
+
+  return fallback.data;
 }
 
 export async function retryFailedCrmPushes(limit = 100) {
