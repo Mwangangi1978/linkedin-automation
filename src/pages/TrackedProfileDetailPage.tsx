@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, RefreshCcw } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getTrackedProfile, triggerRun, toggleProfileIntegration } from '../lib/api';
-import type { TrackedProfile } from '../lib/models';
+import { getLatestRunForProfile, getSettings, getTrackedProfile, triggerRun, toggleProfileIntegration } from '../lib/api';
+import type { ScrapeRun, SystemConfig, TrackedProfile } from '../lib/models';
 import { formatRelativeLabel } from '../lib/utils';
 
 type RunSummary = {
@@ -19,9 +19,13 @@ export function TrackedProfileDetailPage() {
   const { profileId } = useParams();
   const navigate = useNavigate();
   const [profile, setProfile] = useState<TrackedProfile | null>(null);
+  const [latestRun, setLatestRun] = useState<ScrapeRun | null>(null);
+  const [settings, setSettings] = useState<Pick<SystemConfig, 'schedule_enabled' | 'default_schedule'> | null>(null);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [running, setRunning] = useState(false);
+  const [refreshingRun, setRefreshingRun] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [summary, setSummary] = useState<RunSummary | null>(null);
 
   async function load() {
@@ -30,17 +34,150 @@ export function TrackedProfileDetailPage() {
     }
 
     setLoading(true);
+    setActionError(null);
     try {
-      const data = await getTrackedProfile(profileId);
-      setProfile(data);
+      const [dataResult, runResult, configResult] = await Promise.allSettled([
+        getTrackedProfile(profileId),
+        getLatestRunForProfile(profileId),
+        getSettings(),
+      ]);
+
+      if (dataResult.status === 'fulfilled') {
+        setProfile(dataResult.value);
+      } else {
+        throw dataResult.reason;
+      }
+
+      if (runResult.status === 'fulfilled') {
+        setLatestRun(runResult.value);
+      } else {
+        setLatestRun(null);
+      }
+
+      if (configResult.status === 'fulfilled') {
+        setSettings({
+          schedule_enabled: Boolean(configResult.value?.schedule_enabled),
+          default_schedule: configResult.value?.default_schedule ?? 'Not set',
+        });
+      }
+    } catch (error) {
+      setActionError(`Unable to load profile state: ${String(error)}`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshRunState() {
+    if (!profileId) {
+      return;
+    }
+
+    setRefreshingRun(true);
+    try {
+      const [runData, configData, profileData] = await Promise.all([
+        getLatestRunForProfile(profileId),
+        getSettings(),
+        getTrackedProfile(profileId),
+      ]);
+
+      setLatestRun(runData);
+      setSettings({
+        schedule_enabled: Boolean(configData?.schedule_enabled),
+        default_schedule: configData?.default_schedule ?? 'Not set',
+      });
+      setProfile(profileData);
+    } catch {
+      // Ignore silent refresh errors to avoid breaking active monitoring.
+    } finally {
+      setRefreshingRun(false);
     }
   }
 
   useEffect(() => {
     void load();
   }, [profileId]);
+
+  useEffect(() => {
+    if (!profileId) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void refreshRunState();
+    }, 5000);
+
+    return () => window.clearInterval(timer);
+  }, [profileId]);
+
+  const runStatusText = useMemo(() => {
+    if (!profile) {
+      return 'Loading profile status...';
+    }
+
+    if (!profile.is_active) {
+      return 'Automation is paused for this profile.';
+    }
+
+    if (latestRun?.status === 'running') {
+      return 'Scraping is currently running for this profile.';
+    }
+
+    if (latestRun?.status === 'failed') {
+      return 'The latest scrape failed. Check diagnostics below.';
+    }
+
+    if (latestRun?.status === 'completed') {
+      if (settings?.schedule_enabled) {
+        return `Scrape completed. Waiting for next scheduled run (${settings.default_schedule}).`;
+      }
+      return 'Scrape completed. Automatic scheduling is currently disabled.';
+    }
+
+    if (settings?.schedule_enabled) {
+      return `No completed run yet. Waiting for schedule (${settings.default_schedule}) or manual run.`;
+    }
+
+    return 'No run yet. Start a manual run to begin scraping.';
+  }, [latestRun?.status, profile, settings?.default_schedule, settings?.schedule_enabled]);
+
+  const latestFatalError = useMemo(() => {
+    if (!latestRun?.error_log?.length) {
+      return null;
+    }
+
+    const fatalError = latestRun.error_log.find((entry) => entry?.stage === 'fatal');
+    if (!fatalError || typeof fatalError !== 'object') {
+      return null;
+    }
+
+    const rawMessage = fatalError.message;
+    return typeof rawMessage === 'string' && rawMessage.trim() ? rawMessage : JSON.stringify(fatalError);
+  }, [latestRun]);
+
+  async function onRunNow() {
+    if (!profile) {
+      return;
+    }
+
+    setRunning(true);
+    setActionError(null);
+
+    triggerRun('manual', profile.id)
+      .then((runResult) => {
+        if (runResult?.summary) {
+          setSummary(runResult.summary as RunSummary);
+        }
+      })
+      .catch((error) => {
+        setActionError(String(error));
+      })
+      .finally(async () => {
+        setRunning(false);
+        await refreshRunState();
+      });
+
+    await refreshRunState();
+  }
 
   async function onToggleAutomation() {
     if (!profile) {
@@ -49,6 +186,7 @@ export function TrackedProfileDetailPage() {
 
     const nextEnabled = !profile.is_active;
     setToggling(true);
+    setActionError(null);
 
     try {
       await toggleProfileIntegration(profile.id, nextEnabled);
@@ -56,24 +194,12 @@ export function TrackedProfileDetailPage() {
       setProfile(updatedProfile);
 
       if (nextEnabled) {
-        setRunning(true);
-        try {
-          const runResult = await triggerRun('manual', profile.id);
-          if (runResult?.summary) {
-            setSummary(runResult.summary as RunSummary);
-          }
-          alert('Automation enabled and scrape started for this profile.');
-        } finally {
-          setRunning(false);
-        }
-
-        await load();
+        await onRunNow();
       } else {
         setSummary(null);
-        alert('Automation paused for this profile.');
       }
     } catch (error) {
-      alert(`Unable to update automation: ${String(error)}`);
+      setActionError(`Unable to update automation: ${String(error)}`);
     } finally {
       setToggling(false);
     }
@@ -110,7 +236,10 @@ export function TrackedProfileDetailPage() {
           <span className="status-badge"><span className="dot" /> {profile.is_active ? 'Active' : 'Paused'}</span>
         </div>
         <div className="topbar-right">
-          <button className="btn btn-secondary" onClick={load} disabled={loading}>
+          <button className="btn btn-primary" onClick={() => void onRunNow()} disabled={running || !profile?.is_active}>
+            <RefreshCcw size={14} /> {running ? 'Running...' : 'Run now'}
+          </button>
+          <button className="btn btn-secondary" onClick={load} disabled={loading || refreshingRun}>
             <RefreshCcw size={14} /> Refresh
           </button>
           <button className="btn btn-secondary" onClick={() => navigate('/tracked-profiles')}>
@@ -160,10 +289,37 @@ export function TrackedProfileDetailPage() {
               </div>
             </div>
           </div>
-          <p className="helper-text">
-            {running ? 'Scraper is running for this profile...' : profile.is_active ? 'Automation is enabled for this profile.' : 'Automation is paused for this profile.'}
-          </p>
+          <p className="helper-text">{runStatusText}</p>
+          {actionError ? <p className="helper-text">{actionError}</p> : null}
         </div>
+
+        {latestRun ? (
+          <div className="panel">
+            <div className="panel-title-wrap">
+              <h2 className="panel-title">Live run status</h2>
+              <p className="panel-subtitle">Real-time metrics from the latest run row in scrape_runs.</p>
+            </div>
+            <div className="summary-grid">
+              <div><span>Status</span><strong>{latestRun.status}</strong></div>
+              <div><span>Started</span><strong>{new Date(latestRun.started_at).toLocaleString()}</strong></div>
+              <div><span>Completed</span><strong>{latestRun.completed_at ? formatRelativeLabel(latestRun.completed_at) : 'In progress'}</strong></div>
+              <div><span>Profiles processed</span><strong>{latestRun.profiles_processed}</strong></div>
+              <div><span>Posts found</span><strong>{latestRun.posts_found}</strong></div>
+              <div><span>New posts scraped</span><strong>{latestRun.new_posts_scraped}</strong></div>
+              <div><span>Comments collected</span><strong>{latestRun.comments_collected}</strong></div>
+              <div><span>New unique authors</span><strong>{latestRun.new_unique_authors}</strong></div>
+              <div><span>CRM pushes</span><strong>{latestRun.crm_pushes_succeeded} / {latestRun.crm_pushes_failed}</strong></div>
+            </div>
+            {latestFatalError ? <p className="helper-text">Latest run error: {latestFatalError}</p> : null}
+            {settings ? (
+              <p className="helper-text">
+                {settings.schedule_enabled
+                  ? `Scheduler enabled (${settings.default_schedule}).`
+                  : 'Scheduler disabled. Only manual runs will execute until a scheduler is configured.'}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {summary ? (
           <div className="panel">

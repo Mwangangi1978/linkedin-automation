@@ -15,6 +15,7 @@ export interface TrackedProfile {
 export interface ScrapeRun {
   id: string;
   triggered_by: 'manual' | 'schedule';
+  requested_profile_id: string | null;
   started_at: string;
   completed_at: string | null;
   status: 'running' | 'completed' | 'failed';

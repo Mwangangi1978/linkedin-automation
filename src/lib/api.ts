@@ -142,6 +142,58 @@ export async function listRuns() {
   return (data ?? []) as ScrapeRun[];
 }
 
+export async function listRunsForProfile(profileId: string, limit = 20) {
+  const primaryQuery = await supabase
+    .from('scrape_runs')
+    .select('*')
+    .eq('requested_profile_id', profileId)
+    .order('started_at', { ascending: false })
+    .limit(limit);
+
+  if (!primaryQuery.error) {
+    return (primaryQuery.data ?? []) as ScrapeRun[];
+  }
+
+  const fallbackQuery = await supabase
+    .from('scrape_runs')
+    .select('*')
+    .order('started_at', { ascending: false })
+    .limit(limit);
+
+  if (fallbackQuery.error) {
+    throw fallbackQuery.error;
+  }
+
+  return (fallbackQuery.data ?? []) as ScrapeRun[];
+}
+
+export async function getLatestRunForProfile(profileId: string) {
+  const primaryQuery = await supabase
+    .from('scrape_runs')
+    .select('*')
+    .eq('requested_profile_id', profileId)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!primaryQuery.error) {
+    return (primaryQuery.data ?? null) as ScrapeRun | null;
+  }
+
+  const fallbackQuery = await supabase
+    .from('scrape_runs')
+    .select('*')
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (fallbackQuery.error) {
+    throw fallbackQuery.error;
+  }
+
+  return (fallbackQuery.data ?? null) as ScrapeRun | null;
+}
+
 export async function getSettings() {
   const data = await ensureSystemConfigRow();
   return data as SystemConfig;

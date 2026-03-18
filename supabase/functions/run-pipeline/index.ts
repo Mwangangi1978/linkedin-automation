@@ -32,10 +32,19 @@ interface DeliveryRow {
   status: 'pending' | 'pushed' | 'failed' | 'skipped';
 }
 
+const corsHeaders = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-headers': 'authorization, x-client-info, apikey, content-type',
+  'access-control-allow-methods': 'POST, OPTIONS',
+};
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      ...corsHeaders,
+      'content-type': 'application/json',
+    },
   });
 }
 
@@ -51,6 +60,20 @@ async function updateRun(runId: string, partial: Record<string, unknown>) {
   if (error) {
     throw error;
   }
+}
+
+async function syncRunProgress(runId: string, summary: PipelineSummary) {
+  await updateRun(runId, {
+    status: 'running',
+    profiles_processed: summary.profilesProcessed,
+    posts_found: summary.postsFound,
+    new_posts_scraped: summary.newPostsScraped,
+    comments_collected: summary.commentsCollected,
+    new_unique_authors: summary.newUniqueAuthors,
+    crm_pushes_succeeded: summary.crmPushesSucceeded,
+    crm_pushes_failed: summary.crmPushesFailed,
+    error_log: summary.errorLog,
+  });
 }
 
 async function sendAuthorToHook(summary: PipelineSummary, hook: ZapierHookRow, author: ScrapedAuthorRow, existingFailureCount = 0) {
@@ -205,6 +228,13 @@ async function processHookLookbackDeliveries(summary: PipelineSummary, hooks: Za
 }
 
 serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', {
+      status: 200,
+      headers: corsHeaders,
+    });
+  }
+
   if (req.method !== 'POST') {
     return jsonResponse({ error: 'Method not allowed' }, 405);
   }
@@ -235,7 +265,7 @@ serve(async (req) => {
   try {
     const { data: run, error: runError } = await supabaseAdmin
       .from('scrape_runs')
-      .insert({ triggered_by: triggeredBy, status: 'running' })
+      .insert({ triggered_by: triggeredBy, status: 'running', requested_profile_id: requestedProfileId })
       .select('id')
       .single();
 
@@ -266,7 +296,7 @@ serve(async (req) => {
     }
 
     if (requestedProfileId && (!profiles || profiles.length === 0)) {
-      return jsonResponse({ error: 'Requested profile is missing or inactive' }, 404);
+      throw new Error('Requested profile is missing or inactive');
     }
 
     if (hooksError) {
@@ -290,9 +320,11 @@ serve(async (req) => {
     }
 
     await processFailedHookRetries(summary, (hooks ?? []) as ZapierHookRow[]);
+    await syncRunProgress(runId, summary);
 
     for (const profile of profiles ?? []) {
       summary.profilesProcessed += 1;
+      await syncRunProgress(runId, summary);
 
       const posts = await scrapeProfilePosts(profile.profile_url, {
         ...apifyConfig,
@@ -300,6 +332,7 @@ serve(async (req) => {
       });
 
       summary.postsFound += posts.length;
+      await syncRunProgress(runId, summary);
 
       const lookbackDate = new Date();
       lookbackDate.setDate(lookbackDate.getDate() - (profile.post_lookback_days ?? 30));
@@ -339,17 +372,20 @@ serve(async (req) => {
 
           if (postInsertError) {
             summary.errorLog.push({ stage: 'insert_post', postUrl: post.url, message: postInsertError.message });
+            await syncRunProgress(runId, summary);
             continue;
           }
         }
 
         summary.newPostsScraped += 1;
+        await syncRunProgress(runId, summary);
         const comments = await scrapePostComments(post.url, {
           ...apifyConfig,
           maxPostsPerProfile: profile.max_posts_per_run ?? 100,
         });
 
         summary.commentsCollected += comments.length;
+        await syncRunProgress(runId, summary);
 
         for (const comment of comments) {
           const authorUrl = comment.author?.profileUrl;
@@ -381,10 +417,12 @@ serve(async (req) => {
               profileUrl: authorUrl,
               message: authorInsertError.message,
             });
+            await syncRunProgress(runId, summary);
             continue;
           }
 
           summary.newUniqueAuthors += 1;
+          await syncRunProgress(runId, summary);
 
           await supabaseAdmin
             .from('scraped_authors')
@@ -405,9 +443,12 @@ serve(async (req) => {
         .from('tracked_profiles')
         .update({ last_scraped_at: new Date().toISOString() })
         .eq('id', profile.id);
+
+      await syncRunProgress(runId, summary);
     }
 
-      await processHookLookbackDeliveries(summary, (hooks ?? []) as ZapierHookRow[]);
+    await processHookLookbackDeliveries(summary, (hooks ?? []) as ZapierHookRow[]);
+    await syncRunProgress(runId, summary);
 
     await updateRun(runId, {
       completed_at: new Date().toISOString(),
