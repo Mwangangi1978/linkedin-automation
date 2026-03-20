@@ -241,6 +241,14 @@ export async function triggerRun(triggeredBy: 'manual' | 'schedule' = 'manual', 
     const status = error.context?.status;
 
     if (status === 401) {
+      // If local auth still works, the Edge Function is likely verifying against
+      // a different Supabase project/config.
+      const localUser = await supabase.auth.getUser().catch(() => null);
+      if (localUser?.data?.user) {
+        throw new Error(
+          'Your Supabase session looks valid in the browser, but the Edge Function rejected it (401). Please hard-refresh and try again. If it persists, we need to verify Edge Function SUPABASE_URL/env.'
+        );
+      }
       throw new Error('Your Supabase session is missing or expired. Please sign in again.');
     }
 

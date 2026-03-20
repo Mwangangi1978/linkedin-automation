@@ -67,19 +67,45 @@ async function requireAuthenticatedRequest(req: Request) {
     };
   }
 
-  const { data, error } = await supabaseAdmin.auth.getUser(token);
+  // Verify the JWT against GoTrue directly.
+  // Using `supabaseAdmin.auth.getUser(token)` can be unreliable when the client is
+  // created with the service role key (the request might still be authenticated
+  // as the service role instead of the provided user JWT).
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  // GoTrue accepts an `apikey` header for the project. Prefer anon key for auth verification.
+  const apikey = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
-  if (error || !data.user) {
+  if (!supabaseUrl || !apikey) {
+    return {
+      userId: null,
+      response: jsonResponse({ error: 'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY' }, 500),
+    };
+  }
+
+  const verifyRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey,
+    },
+  });
+
+  if (!verifyRes.ok) {
     return {
       userId: null,
       response: jsonResponse({ error: 'Invalid or expired session token' }, 401),
     };
   }
 
-  return {
-    userId: data.user.id,
-    response: null,
-  };
+  const user = (await verifyRes.json()) as { id?: string };
+  if (!user?.id) {
+    return {
+      userId: null,
+      response: jsonResponse({ error: 'Invalid or expired session token' }, 401),
+    };
+  }
+
+  return { userId: user.id, response: null };
 }
 
 function safeExcerpt(text?: string, max = 300) {
