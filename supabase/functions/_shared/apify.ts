@@ -1,5 +1,4 @@
 import type {} from './deno-shims.d.ts';
-import { ApifyClient } from 'https://esm.sh/apify-client@2.12.0';
 import type { ApifyCommentItem, ApifyPostItem } from './types.ts';
 
 export interface ApifyRunConfig {
@@ -14,7 +13,8 @@ export interface ApifyRunConfig {
   maxPostsPerProfile: number;
 }
 
-function getApifyClient(token: string) {
+async function getApifyClient(token: string) {
+  const { ApifyClient } = await import('https://esm.sh/apify-client@2.12.0');
   return new ApifyClient({ token });
 }
 
@@ -74,7 +74,7 @@ export async function scrapeProfilePosts(profileUrl: string, config: ApifyRunCon
     return [];
   }
 
-  const client = getApifyClient(config.apifyToken);
+  const client = await getApifyClient(config.apifyToken);
   const run = await client.actor('apimaestro/linkedin-profile-posts').call({
     username,
     page_number: 1,
@@ -95,7 +95,7 @@ export async function scrapeProfilePosts(profileUrl: string, config: ApifyRunCon
 }
 
 export async function scrapePostComments(postUrl: string, config: ApifyRunConfig): Promise<ApifyCommentItem[]> {
-  const client = getApifyClient(config.apifyToken);
+  const client = await getApifyClient(config.apifyToken);
 
   const run = await client.actor('capable_cauldron~linkedin-comment-scraper').call({
     postUrls: [postUrl],
