@@ -1,36 +1,8 @@
-import type {} from '../_shared/deno-shims.d.ts';
+/// <reference path="../_shared/deno-shims.d.ts" />
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
-import { scrapePostComments, scrapeProfilePosts } from '../_shared/apify.ts';
-import { pushLeadToCrm } from '../_shared/crm.ts';
+import { scrapeProfilePosts } from '../_shared/apify.ts';
 import { supabaseAdmin } from '../_shared/supabaseAdmin.ts';
-import type { PipelineSummary, TriggerMode } from '../_shared/types.ts';
-
-interface ZapierHookRow {
-  id: string;
-  name: string;
-  webhook_url: string;
-  auth_header: string;
-  api_key: string | null;
-  lookback_days: number;
-  is_active: boolean;
-}
-
-interface ScrapedAuthorRow {
-  id: string;
-  linkedin_profile_url: string;
-  first_name: string | null;
-  last_name: string | null;
-  comment_text: string | null;
-  source_post_url: string | null;
-  source_leader_profile_url: string | null;
-  created_at: string;
-}
-
-interface DeliveryRow {
-  author_id: string;
-  failure_count: number;
-  status: 'pending' | 'pushed' | 'failed' | 'skipped';
-}
+import type { TriggerMode } from '../_shared/types.ts';
 
 interface ActiveRunRow {
   id: string;
@@ -38,10 +10,10 @@ interface ActiveRunRow {
 }
 
 const STALE_RUN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const APIFY_WEBHOOK_BASE_URL = 'https://nygeylpqjtxigxzhgaen.supabase.co/functions/v1/process-apify-webhook';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  // Include both lower/upper-case header tokens to avoid browser CORS preflight mismatches.
   'Access-Control-Allow-Headers': 'authorization, Authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
@@ -67,12 +39,7 @@ async function requireAuthenticatedRequest(req: Request) {
     };
   }
 
-  // Verify the JWT against GoTrue directly.
-  // Using `supabaseAdmin.auth.getUser(token)` can be unreliable when the client is
-  // created with the service role key (the request might still be authenticated
-  // as the service role instead of the provided user JWT).
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
-  // GoTrue accepts an `apikey` header for the project. Prefer anon key for auth verification.
   const apikey = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
   if (!supabaseUrl || !apikey) {
@@ -92,7 +59,6 @@ async function requireAuthenticatedRequest(req: Request) {
       },
     });
   } catch (err) {
-    // If this throws, we still must return CORS headers to avoid browser masking the real error.
     console.error('JWT verification fetch failed', err);
     return {
       userId: null,
@@ -118,182 +84,10 @@ async function requireAuthenticatedRequest(req: Request) {
   return { userId: user.id, response: null };
 }
 
-function safeExcerpt(text?: string, max = 300) {
-  if (!text) {
-    return null;
-  }
-  return text.length <= max ? text : text.slice(0, max);
-}
-
 async function updateRun(runId: string, partial: Record<string, unknown>) {
   const { error } = await supabaseAdmin.from('scrape_runs').update(partial).eq('id', runId);
   if (error) {
     throw error;
-  }
-}
-
-async function syncRunProgress(runId: string, summary: PipelineSummary) {
-  await updateRun(runId, {
-    status: 'running',
-    profiles_processed: summary.profilesProcessed,
-    posts_found: summary.postsFound,
-    new_posts_scraped: summary.newPostsScraped,
-    comments_collected: summary.commentsCollected,
-    new_unique_authors: summary.newUniqueAuthors,
-    crm_pushes_succeeded: summary.crmPushesSucceeded,
-    crm_pushes_failed: summary.crmPushesFailed,
-    error_log: summary.errorLog,
-  });
-}
-
-async function sendAuthorToHook(summary: PipelineSummary, hook: ZapierHookRow, author: ScrapedAuthorRow, existingFailureCount = 0) {
-  const deliveryResult = await pushLeadToCrm(
-    {
-      first_name: author.first_name,
-      last_name: author.last_name,
-      linkedin_url: author.linkedin_profile_url,
-      lead_source: `LinkedIn Comment Scraper (${hook.name})`,
-      comment_text: author.comment_text?.slice(0, 500) ?? null,
-      source_post_url: author.source_post_url,
-      source_leader_name: author.source_leader_profile_url,
-      source_profile_url: author.source_leader_profile_url,
-      date_discovered: author.created_at,
-    },
-    {
-      endpoint: hook.webhook_url,
-      apiKey: hook.api_key,
-      authHeader: hook.auth_header,
-    },
-  );
-
-  if (deliveryResult.ok) {
-    summary.crmPushesSucceeded += 1;
-    await supabaseAdmin.from('zapier_hook_deliveries').upsert(
-      {
-        hook_id: hook.id,
-        author_id: author.id,
-        status: 'pushed',
-        failure_count: 0,
-        error: null,
-        pushed_at: new Date().toISOString(),
-      },
-      { onConflict: 'hook_id,author_id' },
-    );
-
-    await supabaseAdmin.from('scraped_authors').update({
-      crm_push_status: 'pushed',
-      crm_pushed_at: new Date().toISOString(),
-      crm_record_id: deliveryResult.crmRecordId,
-      crm_error: null,
-      crm_failure_count: 0,
-    }).eq('id', author.id);
-
-    return;
-  }
-
-  summary.crmPushesFailed += 1;
-  const nextFailureCount = existingFailureCount + 1;
-  const status = nextFailureCount >= 3 ? 'skipped' : 'failed';
-
-  await supabaseAdmin.from('zapier_hook_deliveries').upsert(
-    {
-      hook_id: hook.id,
-      author_id: author.id,
-      status,
-      failure_count: nextFailureCount,
-      error: deliveryResult.error ?? 'Unknown webhook error',
-      pushed_at: null,
-    },
-    { onConflict: 'hook_id,author_id' },
-  );
-
-  await supabaseAdmin.from('scraped_authors').update({
-    crm_push_status: status,
-    crm_error: deliveryResult.error,
-    crm_failure_count: nextFailureCount,
-  }).eq('id', author.id);
-}
-
-async function processFailedHookRetries(summary: PipelineSummary, hooks: ZapierHookRow[]) {
-  for (const hook of hooks) {
-    const { data: failedDeliveries, error: deliveryError } = await supabaseAdmin
-      .from('zapier_hook_deliveries')
-      .select('author_id, failure_count, status')
-      .eq('hook_id', hook.id)
-      .eq('status', 'failed')
-      .lt('failure_count', 3)
-      .limit(500);
-
-    const typedFailedDeliveries = (failedDeliveries ?? []) as DeliveryRow[];
-
-    if (deliveryError || typedFailedDeliveries.length === 0) {
-      continue;
-    }
-
-    const authorIds = typedFailedDeliveries.map((row) => row.author_id);
-    const { data: retryAuthors, error: retryAuthorError } = await supabaseAdmin
-      .from('scraped_authors')
-      .select('id, linkedin_profile_url, first_name, last_name, comment_text, source_post_url, source_leader_profile_url, created_at')
-      .in('id', authorIds);
-
-    if (retryAuthorError || !retryAuthors?.length) {
-      continue;
-    }
-
-    const failureCountByAuthorId = new Map<string, number>(typedFailedDeliveries.map((row) => [row.author_id, row.failure_count]));
-
-    for (const author of retryAuthors as ScrapedAuthorRow[]) {
-      const existingFailureCount: number = failureCountByAuthorId.get(author.id) ?? 0;
-      await sendAuthorToHook(summary, hook, author, existingFailureCount);
-    }
-  }
-}
-
-async function processHookLookbackDeliveries(summary: PipelineSummary, hooks: ZapierHookRow[]) {
-  for (const hook of hooks) {
-    const lookbackDate = new Date();
-    lookbackDate.setDate(lookbackDate.getDate() - Math.max(1, hook.lookback_days));
-
-    const { data: authorsInWindow, error: authorsError } = await supabaseAdmin
-      .from('scraped_authors')
-      .select('id, linkedin_profile_url, first_name, last_name, comment_text, source_post_url, source_leader_profile_url, created_at')
-      .gte('created_at', lookbackDate.toISOString())
-      .order('created_at', { ascending: false })
-      .limit(1000);
-
-    const typedAuthorsInWindow = (authorsInWindow ?? []) as ScrapedAuthorRow[];
-
-    if (authorsError || typedAuthorsInWindow.length === 0) {
-      continue;
-    }
-
-    const authorIds = typedAuthorsInWindow.map((author) => author.id);
-    const { data: existingDeliveries, error: deliveriesError } = await supabaseAdmin
-      .from('zapier_hook_deliveries')
-      .select('author_id, status, failure_count')
-      .eq('hook_id', hook.id)
-      .in('author_id', authorIds);
-
-    if (deliveriesError) {
-      continue;
-    }
-
-    const typedExistingDeliveries = (existingDeliveries ?? []) as DeliveryRow[];
-    const existingByAuthorId = new Map<string, DeliveryRow>(typedExistingDeliveries.map((delivery) => [delivery.author_id, delivery]));
-
-    for (const author of typedAuthorsInWindow) {
-      const existing = existingByAuthorId.get(author.id);
-
-      if (existing?.status === 'pushed' || existing?.status === 'skipped') {
-        continue;
-      }
-
-      if (existing?.status === 'failed') {
-        continue;
-      }
-
-      await sendAuthorToHook(summary, hook, author, existing?.failure_count ?? 0);
-    }
   }
 }
 
@@ -323,15 +117,7 @@ async function recoverStaleRunLock() {
   const typedActiveRun = (activeRun ?? null) as ActiveRunRow | null;
 
   if (!typedActiveRun) {
-    // Never allow lock-recovery cleanup to crash the request (browser will show CORS errors if we don't return).
-    try {
-      const { error: releaseError } = await supabaseAdmin.rpc('release_run_lock');
-      if (releaseError) {
-        console.error('Failed to release run lock during stale-lock recovery (no active run).', releaseError);
-      }
-    } catch (releaseErr) {
-      console.error('Failed to release run lock during stale-lock recovery (no active run).', releaseErr);
-    }
+    await supabaseAdmin.rpc('release_run_lock');
     return;
   }
 
@@ -351,32 +137,12 @@ async function recoverStaleRunLock() {
     })
     .eq('id', typedActiveRun.id);
 
-  // Never allow lock-recovery cleanup to crash the request.
-  try {
-    const { error: releaseError } = await supabaseAdmin.rpc('release_run_lock');
-    if (releaseError) {
-      console.error('Failed to release run lock during stale-lock recovery.', releaseError);
-    }
-  } catch (releaseErr) {
-    console.error('Failed to release run lock during stale-lock recovery.', releaseErr);
-  }
+  await supabaseAdmin.rpc('release_run_lock');
 }
 
-serve(async (req) => {
-  // These must be declared outside the try block so the catch handler can
-  // safely reference them (otherwise the function can crash before returning
-  // JSON with CORS headers).
+serve(async (req: Request) => {
   let runId = '';
-  const summary: PipelineSummary = {
-    profilesProcessed: 0,
-    postsFound: 0,
-    newPostsScraped: 0,
-    commentsCollected: 0,
-    newUniqueAuthors: 0,
-    crmPushesSucceeded: 0,
-    crmPushesFailed: 0,
-    errorLog: [],
-  };
+  let startedBackgroundRuns = false;
 
   try {
     if (req.method === 'OPTIONS') {
@@ -400,15 +166,12 @@ serve(async (req) => {
     const requestedProfileId = typeof body?.profileId === 'string' && body.profileId.trim() ? body.profileId.trim() : null;
 
     if (!supabaseAdmin) {
-      // If the service role secret isn't configured, `supabaseAdmin` will be `null`.
-      // Return a JSON error with CORS rather than crashing (which the gateway turns into a raw 500).
       return jsonResponse({ error: 'Server misconfigured: missing SUPABASE_SERVICE_ROLE_KEY' }, 500);
     }
 
     await recoverStaleRunLock();
 
     const { data: lockResult, error: lockError } = await supabaseAdmin.rpc('acquire_run_lock');
-
     if (lockError || !lockResult) {
       return jsonResponse({ error: 'Run lock is active. Try again later.' }, 409);
     }
@@ -426,15 +189,13 @@ serve(async (req) => {
     runId = run.id;
 
     const profileQuery = supabaseAdmin.from('tracked_profiles').select('*').eq('is_active', true);
-
     if (requestedProfileId) {
       profileQuery.eq('id', requestedProfileId);
     }
 
-    const [{ data: config, error: configError }, { data: profiles, error: profileError }, { data: hooks, error: hooksError }] = await Promise.all([
+    const [{ data: config, error: configError }, { data: profiles, error: profileError }] = await Promise.all([
       supabaseAdmin.from('system_config').select('*').eq('id', true).single(),
       profileQuery,
-      supabaseAdmin.from('zapier_hooks').select('id, name, webhook_url, auth_header, api_key, lookback_days, is_active').eq('is_active', true),
     ]);
 
     if (configError || !config) {
@@ -447,10 +208,6 @@ serve(async (req) => {
 
     if (requestedProfileId && (!profiles || profiles.length === 0)) {
       throw new Error('Requested profile is missing or inactive');
-    }
-
-    if (hooksError) {
-      throw hooksError;
     }
 
     const apifyConfig = {
@@ -469,183 +226,50 @@ serve(async (req) => {
       throw new Error('Missing Apify or LinkedIn credentials in settings');
     }
 
-    await processFailedHookRetries(summary, (hooks ?? []) as ZapierHookRow[]);
-    await syncRunProgress(runId, summary);
-
-    for (const profile of profiles ?? []) {
-      summary.profilesProcessed += 1;
-      await syncRunProgress(runId, summary);
-
-      const posts = await scrapeProfilePosts(profile.profile_url, {
-        ...apifyConfig,
-        maxPostsPerProfile: profile.max_posts_per_run ?? 100,
+    if (!profiles || profiles.length === 0) {
+      await updateRun(runId, {
+        completed_at: new Date().toISOString(),
+        status: 'completed',
       });
-
-      summary.postsFound += posts.length;
-      await syncRunProgress(runId, summary);
-
-      const lookbackDate = new Date();
-      lookbackDate.setDate(lookbackDate.getDate() - (profile.post_lookback_days ?? 30));
-
-      for (const post of posts) {
-        if (!post.url) {
-          continue;
-        }
-
-        const postedAt = post.posted_at?.timestamp ? new Date(post.posted_at.timestamp).toISOString() : null;
-        if (postedAt && new Date(postedAt) < lookbackDate) {
-          continue;
-        }
-
-        const { data: existingPost } = await supabaseAdmin
-          .from('scraped_posts')
-          .select('id, comments_scraped')
-          .eq('post_url', post.url)
-          .maybeSingle();
-
-        if (existingPost?.comments_scraped) {
-          continue;
-        }
-
-        if (!existingPost) {
-          const { error: postInsertError } = await supabaseAdmin
-            .from('scraped_posts')
-            .insert({
-              post_url: post.url,
-              source_profile_url: profile.profile_url,
-              post_text_excerpt: safeExcerpt(post.text),
-              posted_at: postedAt,
-              total_comments: post.stats?.comments ?? null,
-              comments_scraped: false,
-              first_seen_run_id: runId,
-            });
-
-          if (postInsertError) {
-            summary.errorLog.push({ stage: 'insert_post', postUrl: post.url, message: postInsertError.message });
-            await syncRunProgress(runId, summary);
-            continue;
-          }
-        }
-
-        summary.newPostsScraped += 1;
-        await syncRunProgress(runId, summary);
-        const comments = await scrapePostComments(post.url, {
-          ...apifyConfig,
-        });
-
-        summary.commentsCollected += comments.length;
-        await syncRunProgress(runId, summary);
-
-        for (const comment of comments) {
-          const authorUrl = comment.author?.profileUrl;
-          if (!authorUrl) {
-            continue;
-          }
-
-          const { error: authorInsertError } = await supabaseAdmin
-            .from('scraped_authors')
-            .insert({
-              linkedin_profile_url: authorUrl,
-              linkedin_profile_id: comment.author?.id ?? null,
-              full_name: comment.author?.name ?? null,
-              first_name: comment.author?.firstName ?? null,
-              last_name: comment.author?.lastName ?? null,
-              comment_text: comment.text ?? null,
-              source_post_url: post.url,
-              source_leader_profile_url: profile.profile_url,
-              first_seen_run_id: runId,
-              crm_push_status: 'pending',
-            });
-
-          if (authorInsertError) {
-            if (authorInsertError.code === '23505') {
-              continue;
-            }
-            summary.errorLog.push({
-              stage: 'insert_author',
-              profileUrl: authorUrl,
-              message: authorInsertError.message,
-            });
-            await syncRunProgress(runId, summary);
-            continue;
-          }
-
-          summary.newUniqueAuthors += 1;
-          await syncRunProgress(runId, summary);
-
-          await supabaseAdmin
-            .from('scraped_authors')
-            .update({
-              crm_push_status: 'pending',
-              crm_error: null,
-            })
-            .eq('linkedin_profile_url', authorUrl);
-        }
-
-        await supabaseAdmin
-          .from('scraped_posts')
-          .update({ comments_scraped: true })
-          .eq('post_url', post.url);
-      }
-
-      await supabaseAdmin
-        .from('tracked_profiles')
-        .update({ last_scraped_at: new Date().toISOString() })
-        .eq('id', profile.id);
-
-      await syncRunProgress(runId, summary);
+      await supabaseAdmin.rpc('release_run_lock');
+      return jsonResponse({ status: 'completed', runId, message: 'No active profiles to process.' });
     }
 
-    await processHookLookbackDeliveries(summary, (hooks ?? []) as ZapierHookRow[]);
-    await syncRunProgress(runId, summary);
+    for (const profile of profiles) {
+      const webhookUrl = `${APIFY_WEBHOOK_BASE_URL}?runId=${encodeURIComponent(runId)}&stage=posts&profileId=${encodeURIComponent(profile.id)}`;
+      await scrapeProfilePosts(
+        profile.profile_url,
+        {
+          ...apifyConfig,
+          maxPostsPerProfile: profile.max_posts_per_run ?? 100,
+        },
+        webhookUrl,
+      );
+      startedBackgroundRuns = true;
+    }
 
-    await updateRun(runId, {
-      completed_at: new Date().toISOString(),
-      status: 'completed',
-      profiles_processed: summary.profilesProcessed,
-      posts_found: summary.postsFound,
-      new_posts_scraped: summary.newPostsScraped,
-      comments_collected: summary.commentsCollected,
-      new_unique_authors: summary.newUniqueAuthors,
-      crm_pushes_succeeded: summary.crmPushesSucceeded,
-      crm_pushes_failed: summary.crmPushesFailed,
-      error_log: summary.errorLog,
-    });
-
-    return jsonResponse({ runId, status: 'completed', summary });
+    return jsonResponse({ status: 'started', runId });
   } catch (error) {
-    // This catches any unexpected runtime error so the client still receives CORS headers.
     if (runId) {
       try {
         await updateRun(runId, {
           completed_at: new Date().toISOString(),
           status: 'failed',
-          profiles_processed: summary.profilesProcessed,
-          posts_found: summary.postsFound,
-          new_posts_scraped: summary.newPostsScraped,
-          comments_collected: summary.commentsCollected,
-          new_unique_authors: summary.newUniqueAuthors,
-          crm_pushes_succeeded: summary.crmPushesSucceeded,
-          crm_pushes_failed: summary.crmPushesFailed,
-          error_log: [...summary.errorLog, { stage: 'fatal', message: String(error) }],
+          error_log: [{ stage: 'fatal', message: String(error) }],
         });
       } catch (updateError) {
-        console.error('Failed to mark scrape run as failed after pipeline error.', updateError);
+        console.error('Failed to mark scrape run as failed after trigger error.', updateError);
+      }
+    }
+
+    if (!startedBackgroundRuns && supabaseAdmin) {
+      try {
+        await supabaseAdmin.rpc('release_run_lock');
+      } catch (releaseError) {
+        console.error('Failed to release run lock after trigger failure.', releaseError);
       }
     }
 
     return jsonResponse({ error: String(error) }, 500);
-  } finally {
-    if (supabaseAdmin) {
-      // Cleanup should never prevent our main JSON response from being returned (and CORS headers applied).
-      try {
-        const { error: releaseError } = await supabaseAdmin.rpc('release_run_lock');
-        if (releaseError) {
-          console.error('Failed to release run lock in finally block.', releaseError);
-        }
-      } catch (releaseErr) {
-        console.error('Failed to release run lock in finally block.', releaseErr);
-      }
-    }
   }
 });

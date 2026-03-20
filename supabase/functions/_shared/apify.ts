@@ -1,5 +1,4 @@
-import type {} from './deno-shims.d.ts';
-import type { ApifyCommentItem, ApifyPostItem } from './types.ts';
+/// <reference path="./deno-shims.d.ts" />
 
 export interface ApifyRunConfig {
   apifyToken: string;
@@ -23,106 +22,74 @@ function mapCommentSortOrder(sortType: ApifyRunConfig['commentSortType']) {
   return sortType === 'RECENT' ? 'Most Recent' : 'Most Relevant';
 }
 
-function normalizeCommentItem(item: Record<string, unknown>): ApifyCommentItem {
-  const author = (item.author as Record<string, unknown> | undefined) ??
-    (item.commenter as Record<string, unknown> | undefined) ??
-    {};
-
-  const profileUrl =
-    (author.profileUrl as string | undefined) ??
-    (author.profile_url as string | undefined) ??
-    (item.authorProfileUrl as string | undefined) ??
-    (item.author_profile_url as string | undefined) ??
-    (item.commenterProfileUrl as string | undefined) ??
-    (item.profileUrl as string | undefined) ??
-    (item.profile_url as string | undefined);
-
-  return {
-    text:
-      (item.text as string | undefined) ??
-      (item.commentText as string | undefined) ??
-      (item.comment as string | undefined) ??
-      (item.content as string | undefined),
-    author: {
-      profileUrl,
-      id: (author.id as string | undefined) ?? (item.authorId as string | undefined),
-      name:
-        (author.name as string | undefined) ??
-        (item.authorName as string | undefined) ??
-        (item.commenterName as string | undefined),
-      firstName:
-        (author.firstName as string | undefined) ??
-        (author.first_name as string | undefined) ??
-        (item.authorFirstName as string | undefined),
-      lastName:
-        (author.lastName as string | undefined) ??
-        (author.last_name as string | undefined) ??
-        (item.authorLastName as string | undefined),
-    },
-  };
-}
-
 function profileUrlToUsername(profileUrl: string): string {
   const url = new URL(profileUrl);
   const segments = url.pathname.split('/').filter(Boolean);
   return segments.at(-1) ?? '';
 }
 
-export async function scrapeProfilePosts(profileUrl: string, config: ApifyRunConfig): Promise<ApifyPostItem[]> {
+export async function scrapeProfilePosts(profileUrl: string, config: ApifyRunConfig, webhookUrl: string): Promise<string | null> {
   const username = profileUrlToUsername(profileUrl);
   if (!username) {
-    return [];
+    return null;
   }
 
   const client = await getApifyClient(config.apifyToken);
-  const run = await client.actor('apimaestro/linkedin-profile-posts').call({
-    username,
-    page_number: 1,
-    // Actor schema uses snake_case: `total_posts`.
-    total_posts: config.maxPostsPerProfile,
-  });
+  const run = await client.actor('apimaestro/linkedin-profile-posts').start(
+    {
+      username,
+      page_number: 1,
+      // Actor schema uses snake_case: `total_posts`.
+      total_posts: config.maxPostsPerProfile,
+    },
+    {
+      webhooks: [
+        {
+          eventTypes: ['ACTOR.RUN.SUCCEEDED', 'ACTOR.RUN.FAILED'],
+          requestUrl: webhookUrl,
+        },
+      ],
+    },
+  );
 
-  const items: ApifyPostItem[] = [];
-  if (!run.defaultDatasetId) {
-    return items;
-  }
-
-  for await (const item of client.dataset(run.defaultDatasetId).iterateItems()) {
-    items.push(item as ApifyPostItem);
-  }
-
-  return items;
+  return run?.id ?? null;
 }
 
-export async function scrapePostComments(postUrl: string, config: ApifyRunConfig): Promise<ApifyCommentItem[]> {
+export async function scrapePostComments(postUrlsInput: string | string[], config: ApifyRunConfig, webhookUrl: string): Promise<string | null> {
+  const postUrls = Array.isArray(postUrlsInput) ? postUrlsInput.filter(Boolean) : [postUrlsInput].filter(Boolean);
+  if (postUrls.length === 0) {
+    return null;
+  }
+
   const client = await getApifyClient(config.apifyToken);
 
-  const run = await client.actor('capable_cauldron~linkedin-comment-scraper').call({
-    postUrls: [postUrl],
-    maxCommentsPerPost: config.maxCommentsPerPost,
-    // Actor schema says 1-10.
-    commentsPerRequest: Math.min(config.maxCommentsPerPost, 10),
-    sortOrder: mapCommentSortOrder(config.commentSortType),
-    excludeAuthorComments: false,
-    cookies: config.linkedinCookies,
-    proxyConfiguration: {
-      useApifyProxy: true,
-      apifyProxyGroups: ['RESIDENTIAL'],
+  const run = await client.actor('capable_cauldron~linkedin-comment-scraper').start(
+    {
+      postUrls,
+      maxCommentsPerPost: config.maxCommentsPerPost,
+      // Actor schema says 1-10.
+      commentsPerRequest: Math.min(config.maxCommentsPerPost, 10),
+      sortOrder: mapCommentSortOrder(config.commentSortType),
+      excludeAuthorComments: false,
+      cookies: config.linkedinCookies,
+      proxyConfiguration: {
+        useApifyProxy: true,
+        apifyProxyGroups: ['RESIDENTIAL'],
+      },
+      maxRetries: 3,
+      requestDelayMin: config.minDelay,
+      requestDelayMax: config.maxDelay,
+      maxDatasetItems: config.maxCommentsPerPost * postUrls.length,
     },
-    maxRetries: 3,
-    requestDelayMin: config.minDelay,
-    requestDelayMax: config.maxDelay,
-    maxDatasetItems: config.maxCommentsPerPost,
-  });
+    {
+      webhooks: [
+        {
+          eventTypes: ['ACTOR.RUN.SUCCEEDED', 'ACTOR.RUN.FAILED'],
+          requestUrl: webhookUrl,
+        },
+      ],
+    },
+  );
 
-  const items: ApifyCommentItem[] = [];
-  if (!run.defaultDatasetId) {
-    return items;
-  }
-
-  for await (const item of client.dataset(run.defaultDatasetId).iterateItems()) {
-    items.push(normalizeCommentItem(item as Record<string, unknown>));
-  }
-
-  return items;
+  return run?.id ?? null;
 }

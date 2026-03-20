@@ -7,9 +7,25 @@ declare module 'https://esm.sh/apify-client@2.12.0' {
     constructor(options: { token: string });
     actor(name: string): {
       call(input: unknown): Promise<{ defaultDatasetId?: string | null }>;
+      start(
+        input: unknown,
+        options?: {
+          webhooks?: Array<{
+            eventTypes: string[];
+            requestUrl: string;
+          }>;
+        },
+      ): Promise<{ id?: string | null; defaultDatasetId?: string | null }>;
     };
     dataset(id: string): {
       iterateItems(): AsyncIterable<unknown>;
+      listItems(): Promise<{ items: unknown[] }>;
     };
   }
 }
+
+declare const Deno: {
+  env: {
+    get(name: string): string | undefined;
+  };
+};
