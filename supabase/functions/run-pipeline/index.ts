@@ -323,9 +323,14 @@ async function recoverStaleRunLock() {
   const typedActiveRun = (activeRun ?? null) as ActiveRunRow | null;
 
   if (!typedActiveRun) {
-    const { error: releaseError } = await supabaseAdmin.rpc('release_run_lock');
-    if (releaseError) {
-      console.error('Failed to release run lock during stale-lock recovery (no active run).', releaseError);
+    // Never allow lock-recovery cleanup to crash the request (browser will show CORS errors if we don't return).
+    try {
+      const { error: releaseError } = await supabaseAdmin.rpc('release_run_lock');
+      if (releaseError) {
+        console.error('Failed to release run lock during stale-lock recovery (no active run).', releaseError);
+      }
+    } catch (releaseErr) {
+      console.error('Failed to release run lock during stale-lock recovery (no active run).', releaseErr);
     }
     return;
   }
@@ -346,9 +351,14 @@ async function recoverStaleRunLock() {
     })
     .eq('id', typedActiveRun.id);
 
-  const { error: releaseError } = await supabaseAdmin.rpc('release_run_lock');
-  if (releaseError) {
-    console.error('Failed to release run lock during stale-lock recovery.', releaseError);
+  // Never allow lock-recovery cleanup to crash the request.
+  try {
+    const { error: releaseError } = await supabaseAdmin.rpc('release_run_lock');
+    if (releaseError) {
+      console.error('Failed to release run lock during stale-lock recovery.', releaseError);
+    }
+  } catch (releaseErr) {
+    console.error('Failed to release run lock during stale-lock recovery.', releaseErr);
   }
 }
 
@@ -627,9 +637,14 @@ serve(async (req) => {
     return jsonResponse({ error: String(error) }, 500);
   } finally {
     if (supabaseAdmin) {
-      const { error: releaseError } = await supabaseAdmin.rpc('release_run_lock');
-      if (releaseError) {
-        console.error('Failed to release run lock in finally block.', releaseError);
+      // Cleanup should never prevent our main JSON response from being returned (and CORS headers applied).
+      try {
+        const { error: releaseError } = await supabaseAdmin.rpc('release_run_lock');
+        if (releaseError) {
+          console.error('Failed to release run lock in finally block.', releaseError);
+        }
+      } catch (releaseErr) {
+        console.error('Failed to release run lock in finally block.', releaseErr);
       }
     }
   }
