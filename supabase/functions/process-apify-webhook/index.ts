@@ -89,6 +89,7 @@ function normalizeCommentItem(item: Record<string, unknown>): ApifyCommentItem {
     {};
 
   const profileUrl =
+    (item.commenter_url as string | undefined) ??
     (author.profileUrl as string | undefined) ??
     (author.profile_url as string | undefined) ??
     (item.authorProfileUrl as string | undefined) ??
@@ -97,27 +98,40 @@ function normalizeCommentItem(item: Record<string, unknown>): ApifyCommentItem {
     (item.profileUrl as string | undefined) ??
     (item.profile_url as string | undefined);
 
+  const rawName =
+    (item.commenter_name as string | undefined) ??
+    (author.name as string | undefined) ??
+    (item.authorName as string | undefined) ??
+    (item.commenterName as string | undefined);
+
+  let firstName =
+    (author.firstName as string | undefined) ??
+    (author.first_name as string | undefined) ??
+    (item.authorFirstName as string | undefined);
+  let lastName =
+    (author.lastName as string | undefined) ??
+    (author.last_name as string | undefined) ??
+    (item.authorLastName as string | undefined);
+
+  if (rawName && !firstName && !lastName) {
+    const parts = rawName.split(' ');
+    firstName = parts[0];
+    lastName = parts.slice(1).join(' ');
+  }
+
   return {
     text:
+      (item.comment_text as string | undefined) ??
       (item.text as string | undefined) ??
       (item.commentText as string | undefined) ??
       (item.comment as string | undefined) ??
       (item.content as string | undefined),
     author: {
       profileUrl,
-      id: (author.id as string | undefined) ?? (item.authorId as string | undefined),
-      name:
-        (author.name as string | undefined) ??
-        (item.authorName as string | undefined) ??
-        (item.commenterName as string | undefined),
-      firstName:
-        (author.firstName as string | undefined) ??
-        (author.first_name as string | undefined) ??
-        (item.authorFirstName as string | undefined),
-      lastName:
-        (author.lastName as string | undefined) ??
-        (author.last_name as string | undefined) ??
-        (item.authorLastName as string | undefined),
+      id: (item.commenter_profile_id as string | undefined) ?? (author.id as string | undefined) ?? (item.authorId as string | undefined),
+      name: rawName,
+      firstName,
+      lastName,
     },
   };
 }
