@@ -109,6 +109,47 @@ export function TrackedProfileDetailPage() {
     return () => window.clearInterval(timer);
   }, [profileId]);
 
+  const liveStageLabel = useMemo(() => {
+    if (!latestRun) {
+      return 'Idle';
+    }
+
+    if (latestRun.status === 'completed') {
+      return 'Completed';
+    }
+
+    if (latestRun.status === 'failed') {
+      const lastStage = latestRun.error_log
+        ?.slice()
+        .reverse()
+        .find((entry) => typeof entry?.stage === 'string')?.stage;
+
+      if (typeof lastStage === 'string' && lastStage.trim() && lastStage !== 'fatal') {
+        return `Failed (${lastStage})`;
+      }
+
+      return 'Failed';
+    }
+
+    if (latestRun.profiles_processed === 0) {
+      return 'Initializing run';
+    }
+
+    if (latestRun.posts_found === 0) {
+      return 'Scraping profile posts';
+    }
+
+    if (latestRun.comments_collected === 0) {
+      return 'Scraping post comments';
+    }
+
+    if ((latestRun.crm_pushes_succeeded + latestRun.crm_pushes_failed) > 0) {
+      return 'Pushing leads to CRM';
+    }
+
+    return 'Saving and deduplicating leads';
+  }, [latestRun]);
+
   const runStatusText = useMemo(() => {
     if (!profile) {
       return 'Loading profile status...';
@@ -119,7 +160,7 @@ export function TrackedProfileDetailPage() {
     }
 
     if (latestRun?.status === 'running') {
-      return 'Scraping is currently running for this profile.';
+      return `Scraping is currently running for this profile (${liveStageLabel}).`;
     }
 
     if (latestRun?.status === 'failed') {
@@ -138,7 +179,7 @@ export function TrackedProfileDetailPage() {
     }
 
     return 'No run yet. Start a manual run to begin scraping.';
-  }, [latestRun?.status, profile, settings?.default_schedule, settings?.schedule_enabled]);
+  }, [latestRun?.status, liveStageLabel, profile, settings?.default_schedule, settings?.schedule_enabled]);
 
   const latestFatalError = useMemo(() => {
     if (!latestRun?.error_log?.length) {
@@ -301,6 +342,7 @@ export function TrackedProfileDetailPage() {
             </div>
             <div className="summary-grid">
               <div><span>Status</span><strong>{latestRun.status}</strong></div>
+              <div><span>Stage</span><strong>{liveStageLabel}</strong></div>
               <div><span>Started</span><strong>{new Date(latestRun.started_at).toLocaleString()}</strong></div>
               <div><span>Completed</span><strong>{latestRun.completed_at ? formatRelativeLabel(latestRun.completed_at) : 'In progress'}</strong></div>
               <div><span>Profiles processed</span><strong>{latestRun.profiles_processed}</strong></div>

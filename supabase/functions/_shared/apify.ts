@@ -18,6 +18,49 @@ function getApifyClient(token: string) {
   return new ApifyClient({ token });
 }
 
+function mapCommentSortOrder(sortType: ApifyRunConfig['commentSortType']) {
+  return sortType === 'RECENT' ? 'Newest' : 'Most Relevant';
+}
+
+function normalizeCommentItem(item: Record<string, unknown>): ApifyCommentItem {
+  const author = (item.author as Record<string, unknown> | undefined) ??
+    (item.commenter as Record<string, unknown> | undefined) ??
+    {};
+
+  const profileUrl =
+    (author.profileUrl as string | undefined) ??
+    (author.profile_url as string | undefined) ??
+    (item.authorProfileUrl as string | undefined) ??
+    (item.author_profile_url as string | undefined) ??
+    (item.commenterProfileUrl as string | undefined) ??
+    (item.profileUrl as string | undefined) ??
+    (item.profile_url as string | undefined);
+
+  return {
+    text:
+      (item.text as string | undefined) ??
+      (item.commentText as string | undefined) ??
+      (item.comment as string | undefined) ??
+      (item.content as string | undefined),
+    author: {
+      profileUrl,
+      id: (author.id as string | undefined) ?? (item.authorId as string | undefined),
+      name:
+        (author.name as string | undefined) ??
+        (item.authorName as string | undefined) ??
+        (item.commenterName as string | undefined),
+      firstName:
+        (author.firstName as string | undefined) ??
+        (author.first_name as string | undefined) ??
+        (item.authorFirstName as string | undefined),
+      lastName:
+        (author.lastName as string | undefined) ??
+        (author.last_name as string | undefined) ??
+        (item.authorLastName as string | undefined),
+    },
+  };
+}
+
 function profileUrlToUsername(profileUrl: string): string {
   const url = new URL(profileUrl);
   const segments = url.pathname.split('/').filter(Boolean);
@@ -58,19 +101,21 @@ export async function scrapeProfilePosts(profileUrl: string, config: ApifyRunCon
 export async function scrapePostComments(postUrl: string, config: ApifyRunConfig): Promise<ApifyCommentItem[]> {
   const client = getApifyClient(config.apifyToken);
 
-  const run = await client.actor('curious_coder/linkedin-comment-scraper').call({
-    postUrl,
-    sortType: config.commentSortType,
-    count: config.maxCommentsPerPost,
+  const run = await client.actor('capable_cauldron~linkedin-comment-scraper').call({
+    postUrls: [postUrl],
+    maxCommentsPerPost: config.maxCommentsPerPost,
+    commentsPerRequest: Math.min(config.maxCommentsPerPost, 25),
+    sortOrder: mapCommentSortOrder(config.commentSortType),
+    excludeAuthorComments: false,
     cookies: config.linkedinCookies,
-    userAgent: config.linkedinUserAgent,
-    startPage: 1,
-    minDelay: config.minDelay,
-    maxDelay: config.maxDelay,
-    proxy: {
+    proxyConfiguration: {
       useApifyProxy: true,
-      apifyProxyCountry: config.proxyCountry ?? 'US',
+      apifyProxyGroups: ['RESIDENTIAL'],
     },
+    maxRetries: 3,
+    requestDelayMin: config.minDelay,
+    requestDelayMax: config.maxDelay,
+    maxDatasetItems: config.maxCommentsPerPost,
   });
 
   const items: ApifyCommentItem[] = [];
@@ -79,7 +124,7 @@ export async function scrapePostComments(postUrl: string, config: ApifyRunConfig
   }
 
   for await (const item of client.dataset(run.defaultDatasetId).iterateItems()) {
-    items.push(item as ApifyCommentItem);
+    items.push(normalizeCommentItem(item as Record<string, unknown>));
   }
 
   return items;

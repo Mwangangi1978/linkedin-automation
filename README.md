@@ -13,7 +13,7 @@ React + Supabase + Apify implementation for:
 - Database/Auth/Functions: Supabase
 - Scraping: Apify actors
   - `apimaestro/linkedin-profile-posts-scraper`
-  - `curious_coder/linkedin-comment-scraper`
+  - `capable_cauldron~linkedin-comment-scraper`
 
 ## Project Structure
 
@@ -64,6 +64,8 @@ This creates:
 - run lock functions `acquire_run_lock` / `release_run_lock`
 
 ## Edge Function
+
+Single function in use: `run-pipeline`.
 
 Deploy `supabase/functions/run-pipeline` with secrets:
 

@@ -1,7 +1,7 @@
 import type { ScrapeRun, ScrapedAuthor, SystemConfig, TrackedProfile, ZapierHook } from './models';
 import { supabase } from './supabase';
 
-const pipelineFunctionName = import.meta.env.VITE_PIPELINE_FUNCTION_NAME?.trim() || 'link-scraper';
+const pipelineFunctionName = import.meta.env.VITE_PIPELINE_FUNCTION_NAME?.trim() || 'run-pipeline';
 
 async function requireAuthenticatedSession() {
   const { data, error } = await supabase.auth.getUser();

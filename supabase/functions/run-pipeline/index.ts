@@ -32,6 +32,13 @@ interface DeliveryRow {
   status: 'pending' | 'pushed' | 'failed' | 'skipped';
 }
 
+interface ActiveRunRow {
+  id: string;
+  started_at: string;
+}
+
+const STALE_RUN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+
 const corsHeaders = {
   'access-control-allow-origin': '*',
   'access-control-allow-headers': 'authorization, x-client-info, apikey, content-type',
@@ -253,6 +260,55 @@ async function processHookLookbackDeliveries(summary: PipelineSummary, hooks: Za
   }
 }
 
+async function recoverStaleRunLock() {
+  const { data: lockConfig, error: configError } = await supabaseAdmin
+    .from('system_config')
+    .select('run_lock')
+    .eq('id', true)
+    .maybeSingle();
+
+  if (configError || !lockConfig?.run_lock) {
+    return;
+  }
+
+  const { data: activeRun, error: activeRunError } = await supabaseAdmin
+    .from('scrape_runs')
+    .select('id, started_at')
+    .eq('status', 'running')
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (activeRunError) {
+    return;
+  }
+
+  const typedActiveRun = (activeRun ?? null) as ActiveRunRow | null;
+
+  if (!typedActiveRun) {
+    await supabaseAdmin.rpc('release_run_lock').catch(() => null);
+    return;
+  }
+
+  const startedAtMs = new Date(typedActiveRun.started_at).getTime();
+  const isStale = Number.isFinite(startedAtMs) && Date.now() - startedAtMs > STALE_RUN_TIMEOUT_MS;
+
+  if (!isStale) {
+    return;
+  }
+
+  await supabaseAdmin
+    .from('scrape_runs')
+    .update({
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_log: [{ stage: 'fatal', message: 'Run timed out and was marked stale automatically.' }],
+    })
+    .eq('id', typedActiveRun.id);
+
+  await supabaseAdmin.rpc('release_run_lock').catch(() => null);
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', {
@@ -284,6 +340,8 @@ serve(async (req) => {
     crmPushesFailed: 0,
     errorLog: [],
   };
+
+  await recoverStaleRunLock();
 
   const { data: lockResult, error: lockError } = await supabaseAdmin.rpc('acquire_run_lock');
 
