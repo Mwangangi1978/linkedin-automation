@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, RefreshCcw } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getLatestRunForProfile, getSettings, getTrackedProfile, triggerRun, toggleProfileIntegration } from '../lib/api';
+import { getLatestRunForProfile, getSettings, getTrackedProfile, triggerRun, toggleProfileIntegration, updateTrackedProfile } from '../lib/api';
 import type { ScrapeRun, SystemConfig, TrackedProfile } from '../lib/models';
 import { formatRelativeLabel } from '../lib/utils';
 
@@ -27,6 +27,15 @@ export function TrackedProfileDetailPage() {
   const [refreshingRun, setRefreshingRun] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [summary, setSummary] = useState<RunSummary | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editingSaving, setEditingSaving] = useState(false);
+
+  // Editable fields (separate from `profile` so in-progress changes don't get overwritten).
+  const [editProfileUrl, setEditProfileUrl] = useState('');
+  const [editDisplayName, setEditDisplayName] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [editLookbackDays, setEditLookbackDays] = useState(7);
+  const [editMaxPosts, setEditMaxPosts] = useState(25);
 
   async function load() {
     if (!profileId) {
@@ -72,6 +81,9 @@ export function TrackedProfileDetailPage() {
       return;
     }
 
+    // Prevent polling from overwriting user edits.
+    if (editing) return;
+
     setRefreshingRun(true);
     try {
       const [runData, configData, profileData] = await Promise.all([
@@ -102,12 +114,27 @@ export function TrackedProfileDetailPage() {
       return;
     }
 
+    if (editing) {
+      return;
+    }
+
     const timer = window.setInterval(() => {
       void refreshRunState();
     }, 5000);
 
     return () => window.clearInterval(timer);
-  }, [profileId]);
+  }, [profileId, editing]);
+
+  useEffect(() => {
+    if (!profile) return;
+    if (editing) return;
+
+    setEditProfileUrl(profile.profile_url);
+    setEditDisplayName(profile.display_name ?? '');
+    setEditNotes(profile.notes ?? '');
+    setEditLookbackDays(profile.post_lookback_days);
+    setEditMaxPosts(profile.max_posts_per_run);
+  }, [profile, editing]);
 
   const liveStageLabel = useMemo(() => {
     if (!latestRun) {
@@ -200,6 +227,8 @@ export function TrackedProfileDetailPage() {
       return;
     }
 
+    if (editing) return;
+
     setRunning(true);
     setActionError(null);
 
@@ -225,6 +254,8 @@ export function TrackedProfileDetailPage() {
       return;
     }
 
+    if (editing) return;
+
     const nextEnabled = !profile.is_active;
     setToggling(true);
     setActionError(null);
@@ -243,6 +274,57 @@ export function TrackedProfileDetailPage() {
       setActionError(`Unable to update automation: ${String(error)}`);
     } finally {
       setToggling(false);
+    }
+  }
+
+  function resetEditsFromProfile() {
+    if (!profile) return;
+    setEditProfileUrl(profile.profile_url);
+    setEditDisplayName(profile.display_name ?? '');
+    setEditNotes(profile.notes ?? '');
+    setEditLookbackDays(profile.post_lookback_days);
+    setEditMaxPosts(profile.max_posts_per_run);
+  }
+
+  function onCancelEdits() {
+    setEditing(false);
+    setActionError(null);
+    setEditingSaving(false);
+    resetEditsFromProfile();
+  }
+
+  async function onSaveEdits() {
+    if (!profile) return;
+
+    const profileUrl = editProfileUrl.trim();
+    if (!profileUrl) {
+      setActionError('Profile URL is required.');
+      return;
+    }
+
+    const displayName = editDisplayName.trim();
+    const notes = editNotes.trim();
+
+    // Keep values within the supported ranges (same constraints used in the list page).
+    const lookback = Math.max(1, Math.min(90, Math.floor(editLookbackDays)));
+    const maxPostsPerRun = Math.max(1, Math.min(500, Math.floor(editMaxPosts)));
+
+    setEditingSaving(true);
+    setActionError(null);
+    try {
+      await updateTrackedProfile(profile.id, {
+        profile_url: profileUrl,
+        display_name: displayName ? displayName : null,
+        notes: notes ? notes : null,
+        post_lookback_days: lookback,
+        max_posts_per_run: maxPostsPerRun,
+      });
+      setEditing(false);
+      await load();
+    } catch (error) {
+      setActionError(`Unable to save profile: ${String(error)}`);
+    } finally {
+      setEditingSaving(false);
     }
   }
 
@@ -277,10 +359,10 @@ export function TrackedProfileDetailPage() {
           <span className="status-badge"><span className="dot" /> {profile.is_active ? 'Active' : 'Paused'}</span>
         </div>
         <div className="topbar-right">
-          <button className="btn btn-primary" onClick={() => void onRunNow()} disabled={running || !profile?.is_active}>
+          <button className="btn btn-primary" onClick={() => void onRunNow()} disabled={running || !profile?.is_active || editing}>
             <RefreshCcw size={14} /> {running ? 'Running...' : 'Run now'}
           </button>
-          <button className="btn btn-secondary" onClick={load} disabled={loading || refreshingRun}>
+          <button className="btn btn-secondary" onClick={load} disabled={loading || refreshingRun || editing}>
             <RefreshCcw size={14} /> Refresh
           </button>
           <button className="btn btn-secondary" onClick={() => navigate('/tracked-profiles')}>
@@ -323,7 +405,7 @@ export function TrackedProfileDetailPage() {
                 <button
                   className={`pill-status ${profile.is_active ? 'active' : 'paused'}`}
                   onClick={() => void onToggleAutomation()}
-                  disabled={toggling || running}
+                  disabled={toggling || running || editing}
                 >
                   <span className={`toggle ${profile.is_active ? 'on' : ''}`} /> {profile.is_active ? 'On' : 'Off'}
                 </button>
@@ -332,7 +414,115 @@ export function TrackedProfileDetailPage() {
           </div>
           <p className="helper-text">{runStatusText}</p>
           {actionError ? <p className="helper-text">{actionError}</p> : null}
+
+          {!editing ? (
+            <button
+              className="btn btn-secondary"
+              onClick={() => {
+                setActionError(null);
+                setEditing(true);
+              }}
+              disabled={toggling || running || refreshingRun}
+            >
+              Edit profile
+            </button>
+          ) : null}
         </div>
+
+        {editing ? (
+          <div className="panel">
+            <div className="panel-title-wrap">
+              <h2 className="panel-title">Edit tracked profile</h2>
+              <p className="panel-subtitle">
+                Update the scraping configuration for this LinkedIn source.
+              </p>
+            </div>
+
+            <div className="form-stack">
+              <div className="field-row">
+                <div className="field-group">
+                  <label className="field-label">Profile URL</label>
+                  <div className="field-surface">
+                    <input
+                      value={editProfileUrl}
+                      onChange={(e) => setEditProfileUrl(e.target.value)}
+                      placeholder="https://www.linkedin.com/in/username"
+                      disabled={editingSaving}
+                      aria-label="Profile URL"
+                    />
+                  </div>
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Lookback</label>
+                  <div className="field-surface">
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={editLookbackDays}
+                      onChange={(e) => setEditLookbackDays(Number(e.target.value))}
+                      disabled={editingSaving}
+                      aria-label="Lookback days"
+                    />
+                  </div>
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Max posts/run</label>
+                  <div className="field-surface">
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      value={editMaxPosts}
+                      onChange={(e) => setEditMaxPosts(Number(e.target.value))}
+                      disabled={editingSaving}
+                      aria-label="Max posts per run"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="field-row">
+                <div className="field-group">
+                  <label className="field-label">Display name</label>
+                  <div className="field-surface">
+                    <input
+                      value={editDisplayName}
+                      onChange={(e) => setEditDisplayName(e.target.value)}
+                      placeholder="e.g. Daniel Harper"
+                      disabled={editingSaving}
+                      aria-label="Display name"
+                    />
+                  </div>
+                </div>
+
+                <div className="field-group" style={{ gridColumn: 'span 2' }}>
+                  <label className="field-label">Notes</label>
+                  <div className="field-surface">
+                    <input
+                      value={editNotes}
+                      onChange={(e) => setEditNotes(e.target.value)}
+                      placeholder="Optional context for this profile"
+                      disabled={editingSaving}
+                      aria-label="Notes"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="form-actions">
+                <button className="btn btn-secondary" onClick={onCancelEdits} disabled={editingSaving}>
+                  Cancel
+                </button>
+                <button className="btn btn-primary" onClick={() => void onSaveEdits()} disabled={editingSaving}>
+                  {editingSaving ? 'Saving...' : 'Save changes'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {latestRun ? (
           <div className="panel">
