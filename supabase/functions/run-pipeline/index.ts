@@ -40,10 +40,10 @@ interface ActiveRunRow {
 const STALE_RUN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 const corsHeaders = {
-  'access-control-allow-origin': '*',
+  'Access-Control-Allow-Origin': '*',
   // Include both lower/upper-case header tokens to avoid browser CORS preflight mismatches.
-  'access-control-allow-headers': 'authorization, Authorization, x-client-info, apikey, content-type',
-  'access-control-allow-methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, Authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -82,13 +82,23 @@ async function requireAuthenticatedRequest(req: Request) {
     };
   }
 
-  const verifyRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      apikey,
-    },
-  });
+  let verifyRes: Response;
+  try {
+    verifyRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey,
+      },
+    });
+  } catch (err) {
+    // If this throws, we still must return CORS headers to avoid browser masking the real error.
+    console.error('JWT verification fetch failed', err);
+    return {
+      userId: null,
+      response: jsonResponse({ error: 'Failed to verify session token' }, 500),
+    };
+  }
 
   if (!verifyRes.ok) {
     return {
@@ -337,48 +347,48 @@ async function recoverStaleRunLock() {
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', {
-      status: 200,
-      headers: corsHeaders,
-    });
-  }
-
-  if (req.method !== 'POST') {
-    return jsonResponse({ error: 'Method not allowed' }, 405);
-  }
-
-  const auth = await requireAuthenticatedRequest(req);
-  if (auth.response) {
-    return auth.response;
-  }
-
-  const body = await req.json().catch(() => ({}));
-  const triggeredBy = (body?.triggeredBy ?? 'manual') as TriggerMode;
-  const requestedProfileId = typeof body?.profileId === 'string' && body.profileId.trim() ? body.profileId.trim() : null;
-
-  const summary: PipelineSummary = {
-    profilesProcessed: 0,
-    postsFound: 0,
-    newPostsScraped: 0,
-    commentsCollected: 0,
-    newUniqueAuthors: 0,
-    crmPushesSucceeded: 0,
-    crmPushesFailed: 0,
-    errorLog: [],
-  };
-
-  await recoverStaleRunLock();
-
-  const { data: lockResult, error: lockError } = await supabaseAdmin.rpc('acquire_run_lock');
-
-  if (lockError || !lockResult) {
-    return jsonResponse({ error: 'Run lock is active. Try again later.' }, 409);
-  }
-
-  let runId = '';
-
   try {
+    if (req.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders,
+      });
+    }
+
+    if (req.method !== 'POST') {
+      return jsonResponse({ error: 'Method not allowed' }, 405);
+    }
+
+    const auth = await requireAuthenticatedRequest(req);
+    if (auth.response) {
+      return auth.response;
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const triggeredBy = (body?.triggeredBy ?? 'manual') as TriggerMode;
+    const requestedProfileId = typeof body?.profileId === 'string' && body.profileId.trim() ? body.profileId.trim() : null;
+
+    const summary: PipelineSummary = {
+      profilesProcessed: 0,
+      postsFound: 0,
+      newPostsScraped: 0,
+      commentsCollected: 0,
+      newUniqueAuthors: 0,
+      crmPushesSucceeded: 0,
+      crmPushesFailed: 0,
+      errorLog: [],
+    };
+
+    await recoverStaleRunLock();
+
+    const { data: lockResult, error: lockError } = await supabaseAdmin.rpc('acquire_run_lock');
+
+    if (lockError || !lockResult) {
+      return jsonResponse({ error: 'Run lock is active. Try again later.' }, 409);
+    }
+
+    let runId = '';
+
     const { data: run, error: runError } = await supabaseAdmin
       .from('scrape_runs')
       .insert({ triggered_by: triggeredBy, status: 'running', requested_profile_id: requestedProfileId })
@@ -580,6 +590,7 @@ serve(async (req) => {
 
     return jsonResponse({ runId, status: 'completed', summary });
   } catch (error) {
+    // This catches any unexpected runtime error so the client still receives CORS headers.
     if (runId) {
       await updateRun(runId, {
         completed_at: new Date().toISOString(),
