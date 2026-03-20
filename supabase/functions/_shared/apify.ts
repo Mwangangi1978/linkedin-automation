@@ -1,4 +1,4 @@
-/// <reference path="./deno-shims.d.ts" />
+import type {} from './deno-shims.d.ts';
 import { ApifyClient } from 'npm:apify-client@2.12.0';
 import type { ApifyCommentItem, ApifyPostItem } from './types.ts';
 
@@ -19,7 +19,8 @@ function getApifyClient(token: string) {
 }
 
 function mapCommentSortOrder(sortType: ApifyRunConfig['commentSortType']) {
-  return sortType === 'RECENT' ? 'Newest' : 'Most Relevant';
+  // Actor expects "Most Relevant" or "Most Recent".
+  return sortType === 'RECENT' ? 'Most Recent' : 'Most Relevant';
 }
 
 function normalizeCommentItem(item: Record<string, unknown>): ApifyCommentItem {
@@ -76,14 +77,9 @@ export async function scrapeProfilePosts(profileUrl: string, config: ApifyRunCon
   const client = getApifyClient(config.apifyToken);
   const run = await client.actor('apimaestro/linkedin-profile-posts').call({
     username,
-    cookies: config.linkedinCookies,
-    userAgent: config.linkedinUserAgent,
     page_number: 1,
-    totalPosts: config.maxPostsPerProfile,
-    proxy: {
-      useApifyProxy: true,
-      apifyProxyCountry: config.proxyCountry ?? 'US',
-    },
+    // Actor schema uses snake_case: `total_posts`.
+    total_posts: config.maxPostsPerProfile,
   });
 
   const items: ApifyPostItem[] = [];
@@ -104,7 +100,8 @@ export async function scrapePostComments(postUrl: string, config: ApifyRunConfig
   const run = await client.actor('capable_cauldron~linkedin-comment-scraper').call({
     postUrls: [postUrl],
     maxCommentsPerPost: config.maxCommentsPerPost,
-    commentsPerRequest: Math.min(config.maxCommentsPerPost, 25),
+    // Actor schema says 1-10.
+    commentsPerRequest: Math.min(config.maxCommentsPerPost, 10),
     sortOrder: mapCommentSortOrder(config.commentSortType),
     excludeAuthorComments: false,
     cookies: config.linkedinCookies,

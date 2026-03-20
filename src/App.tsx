@@ -34,13 +34,11 @@ function AppRoutes() {
 
 function App() {
   const [isAuthed, setIsAuthed] = useState(false);
-  const [checkingSession, setCheckingSession] = useState(true);
+  // Avoid synchronous setState inside the effect when Supabase isn't configured.
+  const [checkingSession, setCheckingSession] = useState(isSupabaseConfigured);
 
   useEffect(() => {
-    if (!isSupabaseConfigured) {
-      setCheckingSession(false);
-      return;
-    }
+    if (!isSupabaseConfigured) return;
 
     supabase.auth.getSession().then(({ data }) => {
       setIsAuthed(Boolean(data.session));

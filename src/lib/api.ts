@@ -11,6 +11,16 @@ async function requireAuthenticatedSession() {
   }
 }
 
+async function requireAuthenticatedAccessToken() {
+  const { data, error } = await supabase.auth.getSession();
+
+  if (error || !data.session?.access_token) {
+    throw new Error('Your Supabase session is missing or expired. Please sign in again.');
+  }
+
+  return data.session.access_token;
+}
+
 async function ensureSystemConfigRow() {
   const { data, error } = await supabase
     .from('system_config')
@@ -213,19 +223,34 @@ export async function saveSettings(payload: Partial<SystemConfig>) {
 }
 
 export async function triggerRun(triggeredBy: 'manual' | 'schedule' = 'manual', profileId?: string) {
+  const accessToken = await requireAuthenticatedAccessToken();
+
   const { data, error } = await supabase.functions.invoke(pipelineFunctionName, {
     body: {
       triggeredBy,
       profileId,
     },
+    headers: {
+      // Some environments/clients don't automatically attach the JWT for Edge Function calls.
+      // Passing it explicitly avoids "FunctionsFetchError: Failed to send a request".
+      Authorization: `Bearer ${accessToken}`,
+    },
   });
+
   if (error) {
     const status = error.context?.status;
+
+    if (status === 401) {
+      throw new Error('Your Supabase session is missing or expired. Please sign in again.');
+    }
+
     if (status === 409) {
       throw new Error('A scrape run is already in progress. Please wait for it to finish before starting another run.');
     }
+
     throw error;
   }
+
   return data;
 }
 

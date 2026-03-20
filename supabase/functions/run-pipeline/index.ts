@@ -1,4 +1,4 @@
-/// <reference path="../_shared/deno-shims.d.ts" />
+import type {} from '../_shared/deno-shims.d.ts';
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { scrapePostComments, scrapeProfilePosts } from '../_shared/apify.ts';
 import { pushLeadToCrm } from '../_shared/crm.ts';
@@ -41,7 +41,8 @@ const STALE_RUN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 const corsHeaders = {
   'access-control-allow-origin': '*',
-  'access-control-allow-headers': 'authorization, x-client-info, apikey, content-type',
+  // Include both lower/upper-case header tokens to avoid browser CORS preflight mismatches.
+  'access-control-allow-headers': 'authorization, Authorization, x-client-info, apikey, content-type',
   'access-control-allow-methods': 'POST, OPTIONS',
 };
 
@@ -470,7 +471,6 @@ serve(async (req) => {
         await syncRunProgress(runId, summary);
         const comments = await scrapePostComments(post.url, {
           ...apifyConfig,
-          maxPostsPerProfile: profile.max_posts_per_run ?? 100,
         });
 
         summary.commentsCollected += comments.length;
