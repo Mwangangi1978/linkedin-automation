@@ -1,5 +1,5 @@
 import type {} from './deno-shims.d.ts';
-import { ApifyClient } from 'npm:apify-client@2.12.0';
+import { ApifyClient } from 'https://esm.sh/apify-client@2.12.0';
 import type { ApifyCommentItem, ApifyPostItem } from './types.ts';
 
 export interface ApifyRunConfig {

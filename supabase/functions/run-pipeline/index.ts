@@ -383,6 +383,12 @@ serve(async (req) => {
     const triggeredBy = (body?.triggeredBy ?? 'manual') as TriggerMode;
     const requestedProfileId = typeof body?.profileId === 'string' && body.profileId.trim() ? body.profileId.trim() : null;
 
+    if (!supabaseAdmin) {
+      // If the service role secret isn't configured, `supabaseAdmin` will be `null`.
+      // Return a JSON error with CORS rather than crashing (which the gateway turns into a raw 500).
+      return jsonResponse({ error: 'Server misconfigured: missing SUPABASE_SERVICE_ROLE_KEY' }, 500);
+    }
+
     await recoverStaleRunLock();
 
     const { data: lockResult, error: lockError } = await supabaseAdmin.rpc('acquire_run_lock');
@@ -610,6 +616,8 @@ serve(async (req) => {
 
     return jsonResponse({ error: String(error) }, 500);
   } finally {
-    await supabaseAdmin.rpc('release_run_lock').catch(() => null);
+    if (supabaseAdmin) {
+      await supabaseAdmin.rpc('release_run_lock').catch(() => null);
+    }
   }
 });
