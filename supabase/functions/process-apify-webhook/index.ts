@@ -431,15 +431,26 @@ serve(async (req: Request) => {
       const commentPostUrls: string[] = [];
 
       for (const rawItem of items as Array<Record<string, unknown>>) {
-        const postUrl = rawItem.url as string | undefined;
+        const postUrl =
+          (rawItem.url as string | undefined) ??
+          (rawItem.postUrl as string | undefined) ??
+          (rawItem.post_url as string | undefined);
+
         if (!postUrl) {
+          console.log('⚠️ Skipped: Could not find post URL in Apify item', rawItem);
           continue;
         }
 
-        const timestamp = (rawItem.posted_at as Record<string, unknown> | undefined)?.timestamp;
-        const postedAt = typeof timestamp === 'number' ? new Date(timestamp).toISOString() : null;
+        let postedAt: string | null = null;
+        if (typeof rawItem.posted_at === 'string') {
+          postedAt = rawItem.posted_at;
+        } else if (rawItem.posted_at && typeof rawItem.posted_at === 'object') {
+          const ts = (rawItem.posted_at as Record<string, unknown>).timestamp;
+          if (typeof ts === 'number') postedAt = new Date(ts).toISOString();
+        }
 
         if (postedAt && new Date(postedAt) < lookbackDate) {
+          console.log(`⏩ Skipped: Post too old (${postedAt}). Lookback limit is ${lookbackDate.toISOString()}`);
           continue;
         }
 
@@ -450,6 +461,7 @@ serve(async (req: Request) => {
           .maybeSingle();
 
         if (existingPost?.comments_scraped) {
+          console.log(`⏩ Skipped: Comments already scraped for ${postUrl}`);
           continue;
         }
 
@@ -468,11 +480,13 @@ serve(async (req: Request) => {
             });
 
           if (postInsertError) {
+            console.error('❌ DB Insert Error for post:', postUrl, postInsertError);
             summary.errorLog.push({ stage: 'insert_post', postUrl, message: postInsertError.message });
             continue;
           }
         }
 
+        console.log(`✅ Successfully queued post for comment scraping: ${postUrl}`);
         summary.newPostsScraped += 1;
         commentPostUrls.push(postUrl);
       }
