@@ -349,7 +349,7 @@ async function getApifyConfig() {
 }
 
 async function getApifyClient(token: string) {
-  const { ApifyClient } = await import('https://esm.sh/apify-client@2.12.0');
+  const { ApifyClient } = await import('npm:apify-client@2.12.0');
   return new ApifyClient({ token });
 }
 
