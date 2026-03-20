@@ -193,15 +193,19 @@ serve(async (req: Request) => {
       profileQuery.eq('id', requestedProfileId);
     }
 
-    const [{ data: config, error: configError }, { data: profiles, error: profileError }] = await Promise.all([
-      supabaseAdmin.from('system_config').select('*').eq('id', true).single(),
-      profileQuery,
-    ]);
+    // Fetch config first so any downstream values (Apify token, delays, etc.)
+    // are guaranteed to exist before we build `apifyConfig`.
+    const { data: config, error: configError } = await supabaseAdmin
+      .from('system_config')
+      .select('*')
+      .eq('id', true)
+      .single();
 
     if (configError || !config) {
       throw configError ?? new Error('Missing system config row');
     }
 
+    const { data: profiles, error: profileError } = await profileQuery;
     if (profileError) {
       throw profileError;
     }
@@ -249,13 +253,27 @@ serve(async (req: Request) => {
     }
 
     return jsonResponse({ status: 'started', runId });
-  } catch (error) {
+  } catch (error: unknown) {
     if (runId) {
       try {
         await updateRun(runId, {
           completed_at: new Date().toISOString(),
           status: 'failed',
-          error_log: [{ stage: 'fatal', message: String(error) }],
+          error_log: [{ stage: 'fatal', message: (() => {
+            console.error('Pipeline Trigger Error:', error);
+
+            const safeStringify = (value: unknown) => {
+              try {
+                return JSON.stringify(value);
+              } catch {
+                return '[unserializable error]';
+              }
+            };
+
+            if (error instanceof Error) return error.message;
+            if (typeof (error as any)?.message === 'string') return (error as any).message;
+            return safeStringify(error);
+          })() }],
         });
       } catch (updateError) {
         console.error('Failed to mark scrape run as failed after trigger error.', updateError);
@@ -270,6 +288,19 @@ serve(async (req: Request) => {
       }
     }
 
-    return jsonResponse({ error: String(error) }, 500);
+    const safeStringify = (value: unknown) => {
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return '[unserializable error]';
+      }
+    };
+
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : (typeof (error as any)?.message === 'string' ? (error as any).message : safeStringify(error));
+
+    return jsonResponse({ error: errorMessage }, 500);
   }
 });
