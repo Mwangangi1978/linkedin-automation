@@ -347,6 +347,21 @@ async function recoverStaleRunLock() {
 }
 
 serve(async (req) => {
+  // These must be declared outside the try block so the catch handler can
+  // safely reference them (otherwise the function can crash before returning
+  // JSON with CORS headers).
+  let runId = '';
+  const summary: PipelineSummary = {
+    profilesProcessed: 0,
+    postsFound: 0,
+    newPostsScraped: 0,
+    commentsCollected: 0,
+    newUniqueAuthors: 0,
+    crmPushesSucceeded: 0,
+    crmPushesFailed: 0,
+    errorLog: [],
+  };
+
   try {
     if (req.method === 'OPTIONS') {
       return new Response(null, {
@@ -368,17 +383,6 @@ serve(async (req) => {
     const triggeredBy = (body?.triggeredBy ?? 'manual') as TriggerMode;
     const requestedProfileId = typeof body?.profileId === 'string' && body.profileId.trim() ? body.profileId.trim() : null;
 
-    const summary: PipelineSummary = {
-      profilesProcessed: 0,
-      postsFound: 0,
-      newPostsScraped: 0,
-      commentsCollected: 0,
-      newUniqueAuthors: 0,
-      crmPushesSucceeded: 0,
-      crmPushesFailed: 0,
-      errorLog: [],
-    };
-
     await recoverStaleRunLock();
 
     const { data: lockResult, error: lockError } = await supabaseAdmin.rpc('acquire_run_lock');
@@ -386,8 +390,6 @@ serve(async (req) => {
     if (lockError || !lockResult) {
       return jsonResponse({ error: 'Run lock is active. Try again later.' }, 409);
     }
-
-    let runId = '';
 
     const { data: run, error: runError } = await supabaseAdmin
       .from('scrape_runs')
