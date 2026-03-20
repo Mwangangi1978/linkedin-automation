@@ -323,7 +323,10 @@ async function recoverStaleRunLock() {
   const typedActiveRun = (activeRun ?? null) as ActiveRunRow | null;
 
   if (!typedActiveRun) {
-    await supabaseAdmin.rpc('release_run_lock').catch(() => null);
+    const { error: releaseError } = await supabaseAdmin.rpc('release_run_lock');
+    if (releaseError) {
+      console.error('Failed to release run lock during stale-lock recovery (no active run).', releaseError);
+    }
     return;
   }
 
@@ -343,7 +346,10 @@ async function recoverStaleRunLock() {
     })
     .eq('id', typedActiveRun.id);
 
-  await supabaseAdmin.rpc('release_run_lock').catch(() => null);
+  const { error: releaseError } = await supabaseAdmin.rpc('release_run_lock');
+  if (releaseError) {
+    console.error('Failed to release run lock during stale-lock recovery.', releaseError);
+  }
 }
 
 serve(async (req) => {
@@ -600,24 +606,31 @@ serve(async (req) => {
   } catch (error) {
     // This catches any unexpected runtime error so the client still receives CORS headers.
     if (runId) {
-      await updateRun(runId, {
-        completed_at: new Date().toISOString(),
-        status: 'failed',
-        profiles_processed: summary.profilesProcessed,
-        posts_found: summary.postsFound,
-        new_posts_scraped: summary.newPostsScraped,
-        comments_collected: summary.commentsCollected,
-        new_unique_authors: summary.newUniqueAuthors,
-        crm_pushes_succeeded: summary.crmPushesSucceeded,
-        crm_pushes_failed: summary.crmPushesFailed,
-        error_log: [...summary.errorLog, { stage: 'fatal', message: String(error) }],
-      }).catch(() => null);
+      try {
+        await updateRun(runId, {
+          completed_at: new Date().toISOString(),
+          status: 'failed',
+          profiles_processed: summary.profilesProcessed,
+          posts_found: summary.postsFound,
+          new_posts_scraped: summary.newPostsScraped,
+          comments_collected: summary.commentsCollected,
+          new_unique_authors: summary.newUniqueAuthors,
+          crm_pushes_succeeded: summary.crmPushesSucceeded,
+          crm_pushes_failed: summary.crmPushesFailed,
+          error_log: [...summary.errorLog, { stage: 'fatal', message: String(error) }],
+        });
+      } catch (updateError) {
+        console.error('Failed to mark scrape run as failed after pipeline error.', updateError);
+      }
     }
 
     return jsonResponse({ error: String(error) }, 500);
   } finally {
     if (supabaseAdmin) {
-      await supabaseAdmin.rpc('release_run_lock').catch(() => null);
+      const { error: releaseError } = await supabaseAdmin.rpc('release_run_lock');
+      if (releaseError) {
+        console.error('Failed to release run lock in finally block.', releaseError);
+      }
     }
   }
 });
