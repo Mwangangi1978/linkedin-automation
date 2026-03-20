@@ -1,5 +1,7 @@
-import { Activity, Blocks, GitBranch, LayoutDashboard, Network, Settings, Users } from 'lucide-react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { Activity, Blocks, GitBranch, LayoutDashboard, LogOut, Network, Settings, Users } from 'lucide-react';
+import { useState } from 'react';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { supabase } from '../lib/supabase';
 
 const links = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -12,6 +14,21 @@ const links = [
 ];
 
 export function AppShell() {
+  const navigate = useNavigate();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    setIsLoggingOut(true);
+    try {
+      await supabase.auth.signOut();
+      navigate('/');
+    } catch (error) {
+      console.error('Logout error:', error);
+      alert('Failed to sign out');
+      setIsLoggingOut(false);
+    }
+  }
+
   return (
     <div className="app-layout">
       <aside className="sidebar">
@@ -38,6 +55,17 @@ export function AppShell() {
             );
           })}
         </nav>
+
+        <div className="sidebar-footer">
+          <button
+            onClick={handleLogout}
+            disabled={isLoggingOut}
+            className="btn logout-btn"
+          >
+            <LogOut size={18} />
+            <span>{isLoggingOut ? 'Signing out...' : 'Sign out'}</span>
+          </button>
+        </div>
       </aside>
 
       <main className="main-content">

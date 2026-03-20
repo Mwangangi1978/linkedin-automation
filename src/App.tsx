@@ -40,17 +40,30 @@ function App() {
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
+    // Check initial session
     supabase.auth.getSession().then(({ data }) => {
       setIsAuthed(Boolean(data.session));
       setCheckingSession(false);
     });
 
+    // Listen for auth state changes (login, logout, token refresh)
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
       setIsAuthed(Boolean(session));
       setCheckingSession(false);
     });
 
-    return () => subscription.subscription.unsubscribe();
+    // Refresh session when user returns from being inactive
+    const handleWindowFocus = async () => {
+      const { data } = await supabase.auth.refreshSession();
+      setIsAuthed(Boolean(data.session));
+    };
+
+    window.addEventListener('focus', handleWindowFocus);
+
+    return () => {
+      subscription.subscription.unsubscribe();
+      window.removeEventListener('focus', handleWindowFocus);
+    };
   }, []);
 
   if (!isSupabaseConfigured) {

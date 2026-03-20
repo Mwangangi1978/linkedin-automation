@@ -903,6 +903,29 @@ textarea {
   border-radius: var(--radius-md);
 }
 
+.sidebar-footer {
+  padding: 16px;
+  border-top: 1px solid var(--border);
+  margin-top: auto;
+}
+
+.logout-btn {
+  width: 100%;
+  background: var(--secondary);
+  color: var(--sidebar-foreground);
+  transition: all 0.2s ease;
+}
+
+.logout-btn:hover:not(:disabled) {
+  background: #e8e6e0;
+  color: var(--primary-foreground);
+}
+
+.logout-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 @media (max-width: 1200px) {
   .cards-grid,
   .summary-grid {
