@@ -1,6 +1,5 @@
 /// <reference path="../_shared/deno-shims.d.ts" />
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
-import { ApifyClient } from 'https://esm.sh/apify-client@2.12.0';
 import { scrapePostComments } from '../_shared/apify.ts';
 import { pushLeadToCrm } from '../_shared/crm.ts';
 import { supabaseAdmin } from '../_shared/supabaseAdmin.ts';
@@ -349,6 +348,11 @@ async function getApifyConfig() {
   };
 }
 
+async function getApifyClient(token: string) {
+  const { ApifyClient } = await import('https://esm.sh/apify-client@2.12.0');
+  return new ApifyClient({ token });
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204 });
@@ -400,7 +404,7 @@ serve(async (req: Request) => {
     }
 
     const apifyConfig = await getApifyConfig();
-    const client = new ApifyClient({ token: apifyConfig.apifyToken });
+    const client = await getApifyClient(apifyConfig.apifyToken);
     const runDataset = client.dataset(datasetId);
     const { items } = await runDataset.listItems();
 
