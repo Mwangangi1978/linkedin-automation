@@ -294,18 +294,19 @@ async function processHookLookbackDeliveries(summary: PipelineSummary, hooks: Za
     const typedExistingDeliveries = (existingDeliveries ?? []) as DeliveryRow[];
     const existingByAuthorId = new Map<string, DeliveryRow>(typedExistingDeliveries.map((delivery) => [delivery.author_id, delivery]));
 
-    for (const author of typedAuthorsInWindow) {
-      const existing = existingByAuthorId.get(author.id);
+    const authorsToPush = typedAuthorsInWindow.filter((author) => {
+      const status = existingByAuthorId.get(author.id)?.status;
+      return status !== 'pushed' && status !== 'skipped' && status !== 'failed';
+    });
 
-      if (existing?.status === 'pushed' || existing?.status === 'skipped') {
-        continue;
-      }
-
-      if (existing?.status === 'failed') {
-        continue;
-      }
-
-      await sendAuthorToHook(summary, hook, author, existing?.failure_count ?? 0);
+    const batchSize = 10;
+    for (let i = 0; i < authorsToPush.length; i += batchSize) {
+      const batch = authorsToPush.slice(i, i + batchSize);
+      await Promise.all(
+        batch.map((author) =>
+          sendAuthorToHook(summary, hook, author, existingByAuthorId.get(author.id)?.failure_count ?? 0)
+        ),
+      );
     }
   }
 }
@@ -535,11 +536,15 @@ serve(async (req: Request) => {
       summary.commentsCollected += items.length;
 
       const touchedPostUrls = new Set<string>();
+      const uniqueAuthorsMap = new Map<string, Record<string, unknown>>();
+
+      console.log(`Processing ${items.length} raw comments in memory...`);
+
       for (const rawItem of items as Array<Record<string, unknown>>) {
         const normalizedComment = normalizeCommentItem(rawItem);
         const authorUrl = normalizedComment.author?.profileUrl;
-
         const sourcePostUrl = extractCommentPostUrl(rawItem);
+
         if (sourcePostUrl) {
           touchedPostUrls.add(sourcePostUrl);
         }
@@ -548,9 +553,8 @@ serve(async (req: Request) => {
           continue;
         }
 
-        const { error: authorInsertError } = await supabaseAdmin
-          .from('scraped_authors')
-          .insert({
+        if (!uniqueAuthorsMap.has(authorUrl)) {
+          uniqueAuthorsMap.set(authorUrl, {
             linkedin_profile_url: authorUrl,
             linkedin_profile_id: normalizedComment.author?.id ?? null,
             full_name: normalizedComment.author?.name ?? null,
@@ -562,36 +566,36 @@ serve(async (req: Request) => {
             first_seen_run_id: runId,
             crm_push_status: 'pending',
           });
-
-        if (authorInsertError) {
-          if (authorInsertError.code === '23505') {
-            continue;
-          }
-          summary.errorLog.push({
-            stage: 'insert_author',
-            profileUrl: authorUrl,
-            message: authorInsertError.message,
-          });
-          continue;
         }
-
-        summary.newUniqueAuthors += 1;
-
-        await supabaseAdmin
-          .from('scraped_authors')
-          .update({
-            crm_push_status: 'pending',
-            crm_error: null,
-          })
-          .eq('linkedin_profile_url', authorUrl);
       }
 
-      for (const postUrl of touchedPostUrls) {
+      const authorsToInsert = Array.from(uniqueAuthorsMap.values());
+      console.log(`Found ${authorsToInsert.length} unique authors. Commencing Bulk Upsert...`);
+
+      const chunkSize = 500;
+      for (let i = 0; i < authorsToInsert.length; i += chunkSize) {
+        const chunk = authorsToInsert.slice(i, i + chunkSize);
+        const { error: authorInsertError } = await supabaseAdmin
+          .from('scraped_authors')
+          .upsert(chunk, { onConflict: 'linkedin_profile_url', ignoreDuplicates: true });
+
+        if (authorInsertError) {
+          console.error('❌ Bulk Insert Error:', authorInsertError);
+          summary.errorLog.push({ stage: 'insert_authors_bulk', message: authorInsertError.message });
+        }
+      }
+
+      summary.newUniqueAuthors += authorsToInsert.length;
+
+      const postUrlsArray = Array.from(touchedPostUrls);
+      if (postUrlsArray.length > 0) {
         await supabaseAdmin
           .from('scraped_posts')
           .update({ comments_scraped: true })
-          .eq('post_url', postUrl);
+          .in('post_url', postUrlsArray);
       }
+
+      console.log('Database updates complete. Triggering CRM sync...');
 
       const { data: hooks } = await supabaseAdmin
         .from('zapier_hooks')
@@ -615,6 +619,7 @@ serve(async (req: Request) => {
       });
 
       await releaseRunLock();
+      console.log('✅ Phase 2 Webhook Completed Successfully!');
 
       return jsonResponse({ ok: true, runId, stage, datasetId }, 200);
     }
